@@ -54,8 +54,11 @@ where
     data: I,
 }
 
-struct BuilderMapAccess<'de> {
-    data: Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>,
+struct BuilderMapAccess<'de, I>
+where
+    I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+{
+    data: I,
     leftover: Option<BuilderDataType<'de>>,
 }
 
@@ -76,7 +79,7 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                 Cow::Owned(v) => visitor.visit_string(v),
             },
             BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
-                data: v,
+                data: v.into_iter(),
                 leftover: None,
             }),
             BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
@@ -91,14 +94,17 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
     }
 }
 
-impl<'de> MapAccess<'de> for BuilderMapAccess<'de> {
+impl<'de, I> MapAccess<'de> for BuilderMapAccess<'de, I>
+where
+    I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+{
     type Error = BuilderError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
     where
         K: DeserializeSeed<'de>,
     {
-        if let Some((a, b)) = self.data.pop() {
+        if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
             let v = seed.deserialize(BuilderDeserializer::from_data(a))?;
             Ok(Some(v))
@@ -131,7 +137,7 @@ impl<'de> MapAccess<'de> for BuilderMapAccess<'de> {
         K: DeserializeSeed<'de>,
         V: DeserializeSeed<'de>,
     {
-        if let Some((a, b)) = self.data.pop() {
+        if let Some((a, b)) = self.data.next() {
             self.leftover = None;
             let va = kseed.deserialize(BuilderDeserializer::from_data(a))?;
             let vb = vseed.deserialize(BuilderDeserializer::from_data(b))?;
