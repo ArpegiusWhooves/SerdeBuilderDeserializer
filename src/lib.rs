@@ -1,38 +1,42 @@
+use serde::de::{
+    self, DeserializeSeed, EnumAccess, Error, IntoDeserializer, MapAccess, SeqAccess,
+    VariantAccess, Visitor,
+};
+use serde::{forward_to_deserialize_any, Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::Display;
-use serde::{forward_to_deserialize_any, Deserialize};
-use serde::de::{
-    self, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess,
-    VariantAccess, Visitor, Error
-};
-
+use std::marker::PhantomData;
 
 pub enum BuilderDataType<'de> {
     Boolean(bool),
     Integer(i64),
+    Unsigned(u64),
     Number(f64),
     String(Cow<'de, str>),
-    Map( Vec<(BuilderDataType<'de>,BuilderDataType<'de>)> ),
-    List( Vec<BuilderDataType<'de>> ),
+    Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
+    List(Vec<BuilderDataType<'de>>),
 }
 
 #[derive(Debug)]
 pub enum BuilderError {
-    InvalidMapAccess
+    InvalidMapAccess,
+    InvalidDeserialization(String),
 }
 
-impl std::fmt::Display for BuilderError {
+impl Display for BuilderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!()
     }
 }
 
-impl std::error::Error for BuilderError { 
-}
+impl std::error::Error for BuilderError {}
 
 impl Error for BuilderError {
-    fn custom<T>(msg:T) -> Self where T:Display {
-        todo!()
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        BuilderError::InvalidDeserialization(format!("{msg}"))
     }
 }
 pub struct BuilderDeserializer<'de>(BuilderDataType<'de>);
@@ -43,30 +47,41 @@ impl<'de> BuilderDeserializer<'de> {
     }
 }
 
+struct BuilderListAccess<'de, I>
+where
+    I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
+{
+    data: I,
+}
+
 struct BuilderMapAccess<'de> {
-    data: Vec<(BuilderDataType<'de>,BuilderDataType<'de>)>,
+    data: Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>,
     leftover: Option<BuilderDataType<'de>>,
 }
 
-impl<'de, 'a> serde::Deserializer<'de> for BuilderDeserializer<'de> {
+impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
     type Error = BuilderError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: Visitor<'de> {
+        V: Visitor<'de>,
+    {
         match self.0 {
             BuilderDataType::Boolean(v) => visitor.visit_bool(v),
             BuilderDataType::Integer(v) => visitor.visit_i64(v),
+            BuilderDataType::Unsigned(v) => visitor.visit_u64(v),
             BuilderDataType::Number(v) => visitor.visit_f64(v),
             BuilderDataType::String(c) => match c {
                 Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
                 Cow::Owned(v) => visitor.visit_string(v),
             },
-            BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess{
+            BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
                 data: v,
-                leftover: None
+                leftover: None,
             }),
-            BuilderDataType::List(v) => todo!(),
+            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
+                data: v.into_iter(),
+            }),
         }
     }
     forward_to_deserialize_any! {
@@ -76,15 +91,15 @@ impl<'de, 'a> serde::Deserializer<'de> for BuilderDeserializer<'de> {
     }
 }
 
-
 impl<'de> MapAccess<'de> for BuilderMapAccess<'de> {
     type Error = BuilderError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
     where
-        K: DeserializeSeed<'de> {
-        if let Some((a,b)) = self.data.pop() {
-            self.leftover = Some(b); 
+        K: DeserializeSeed<'de>,
+    {
+        if let Some((a, b)) = self.data.pop() {
+            self.leftover = Some(b);
             let v = seed.deserialize(BuilderDeserializer::from_data(a))?;
             Ok(Some(v))
         } else {
@@ -94,18 +109,19 @@ impl<'de> MapAccess<'de> for BuilderMapAccess<'de> {
 
     fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
     where
-        V: DeserializeSeed<'de> {
+        V: DeserializeSeed<'de>,
+    {
         if let Some(leftover) = self.leftover.take() {
             seed.deserialize(BuilderDeserializer::from_data(leftover))
         } else {
             Err(BuilderError::InvalidMapAccess)
         }
     }
-    
+
     fn size_hint(&self) -> Option<usize> {
         Some(self.data.len())
     }
-    
+
     fn next_entry_seed<K, V>(
         &mut self,
         kseed: K,
@@ -115,58 +131,112 @@ impl<'de> MapAccess<'de> for BuilderMapAccess<'de> {
         K: DeserializeSeed<'de>,
         V: DeserializeSeed<'de>,
     {
-        if let Some((a,b)) = self.data.pop() {
+        if let Some((a, b)) = self.data.pop() {
             self.leftover = None;
-            let va  = kseed.deserialize(BuilderDeserializer::from_data(a))?;
-            let vb  = vseed.deserialize(BuilderDeserializer::from_data(b))?;
-            Ok(Some((va,vb)))
+            let va = kseed.deserialize(BuilderDeserializer::from_data(a))?;
+            let vb = vseed.deserialize(BuilderDeserializer::from_data(b))?;
+            Ok(Some((va, vb)))
         } else {
             Ok(None)
         }
     }
-    
 }
 
+impl<'de, I> SeqAccess<'de> for BuilderListAccess<'de, I>
+where
+    I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
+{
+    type Error = BuilderError;
 
-pub fn from_data<'a, T>(data: BuilderDataType<'a>) -> Result<T,BuilderError>
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: DeserializeSeed<'de>,
+    {
+        if let Some(a) = self.data.next() {
+            Ok(Some(seed.deserialize(BuilderDeserializer::from_data(a))?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.data.len())
+    }
+}
+
+pub fn from_data<'a, T>(data: BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
-{ 
+{
     Ok(T::deserialize(BuilderDeserializer::from_data(data))?)
 }
-
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+struct Test {
+    a: i32,
+    b: bool,
+    c: String,
+}
 #[cfg(test)]
 mod tests {
 
+    use serde::Serialize;
+
     use super::*;
 
-    #[derive(Debug,PartialEq, Eq,Deserialize)]
-    struct Test{
-        a: i32,
-        b: bool,
-        c: String
+    fn fixture_data() -> Test {
+        Test {
+            a: 123,
+            b: true,
+            c: "test".to_owned(),
+        }
     }
-    
+
     #[test]
-    fn it_works() {
-
-        let j = r#"{
-            "a": 123,
-            "b": true,
-            "c": "test"
-        }"#;
-
-        let result: Test = serde_json::from_str(j).unwrap();
-        println!("{:?}",&result);
-
+    fn test_map_access_with_names() {
         let data = BuilderDataType::Map(vec![
-            (BuilderDataType::String(Cow::from("a")),BuilderDataType::Integer(123)),
-            (BuilderDataType::String(Cow::from("b")),BuilderDataType::Boolean(true)),
-            (BuilderDataType::String(Cow::from("c")),BuilderDataType::String(Cow::from("test"))),
+            (
+                BuilderDataType::String(Cow::from("a")),
+                BuilderDataType::Integer(123),
+            ),
+            (
+                BuilderDataType::String(Cow::from("b")),
+                BuilderDataType::Boolean(true),
+            ),
+            (
+                BuilderDataType::String(Cow::from("c")),
+                BuilderDataType::String(Cow::from("test")),
+            ),
         ]);
 
         let test: Test = from_data(data).unwrap();
 
-        assert_eq!(result, test);
+        assert_eq!(fixture_data(), test);
+    }
+    #[test]
+    fn test_map_access_with_idnex() {
+        let data = BuilderDataType::Map(vec![
+            (BuilderDataType::Unsigned(0), BuilderDataType::Integer(123)),
+            (BuilderDataType::Unsigned(1), BuilderDataType::Boolean(true)),
+            (
+                BuilderDataType::Unsigned(2),
+                BuilderDataType::String(Cow::from("test")),
+            ),
+        ]);
+
+        let test: Test = from_data(data).unwrap();
+
+        assert_eq!(fixture_data(), test);
+    }
+    #[test]
+    fn test_list_access() {
+        let data = BuilderDataType::List(vec![
+            BuilderDataType::Integer(123),
+            BuilderDataType::Boolean(true),
+            BuilderDataType::String(Cow::from("test")),
+        ]);
+
+        let test: Test = from_data(data).unwrap();
+
+        assert_eq!(fixture_data(), test);
     }
 }
