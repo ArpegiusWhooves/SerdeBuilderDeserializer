@@ -4,9 +4,11 @@ use serde::de::{
 };
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
 use std::borrow::Cow;
-use std::fmt::Display;
-use std::marker::PhantomData;
+use std::fmt::Display; 
 
+use std::collections::BTreeMap;
+
+#[derive(Debug,Clone)]
 pub enum BuilderDataType<'de> {
     Boolean(bool),
     Integer(i64),
@@ -176,24 +178,41 @@ where
 {
     Ok(T::deserialize(BuilderDeserializer::from_data(data))?)
 }
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-struct Test {
-    a: i32,
-    b: bool,
-    c: String,
-}
+
 #[cfg(test)]
 mod tests {
 
-    use serde::Serialize;
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+    struct TestSimple {
+        a: i32,
+        b: bool,
+        c: String,
+    }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+    struct TestComplex {
+        a: Vec<TestSimple>,
+        b: BTreeMap<String,TestComplex>
+    }
+    
     use super::*;
 
-    fn fixture_data() -> Test {
-        Test {
+    fn fixture_data_simple() -> TestSimple {
+        TestSimple {
             a: 123,
             b: true,
             c: "test".to_owned(),
+        }
+    }
+
+    fn fixture_data_complex(req: u32) -> TestComplex {
+        TestComplex {
+            a: vec![fixture_data_simple(),fixture_data_simple(),fixture_data_simple()],
+            b: if req == 0 {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([("test".to_owned(),fixture_data_complex(req-1))])
+            }
         }
     }
 
@@ -214,9 +233,9 @@ mod tests {
             ),
         ]);
 
-        let test: Test = from_data(data).unwrap();
+        let test: TestSimple = from_data(data).unwrap();
 
-        assert_eq!(fixture_data(), test);
+        assert_eq!(fixture_data_simple(), test);
     }
     #[test]
     fn test_map_access_with_idnex() {
@@ -229,9 +248,9 @@ mod tests {
             ),
         ]);
 
-        let test: Test = from_data(data).unwrap();
+        let test: TestSimple = from_data(data).unwrap();
 
-        assert_eq!(fixture_data(), test);
+        assert_eq!(fixture_data_simple(), test);
     }
     #[test]
     fn test_list_access() {
@@ -241,8 +260,28 @@ mod tests {
             BuilderDataType::String(Cow::from("test")),
         ]);
 
-        let test: Test = from_data(data).unwrap();
+        let test: TestSimple = from_data(data).unwrap();
 
-        assert_eq!(fixture_data(), test);
+        assert_eq!(fixture_data_simple(), test);
     }
+
+    #[test]
+    fn test_complex() {
+        let data = BuilderDataType::List(vec![
+            BuilderDataType::Integer(123),
+            BuilderDataType::Boolean(true),
+            BuilderDataType::String(Cow::from("test")),
+        ]);
+
+        let data = BuilderDataType::List(vec![
+            BuilderDataType::List(vec![ data.clone(),data.clone(),data.clone() ]),
+            BuilderDataType::Map(vec![])
+        ]);
+
+        let test: TestComplex = from_data(data).unwrap();
+
+        assert_eq!(fixture_data_complex(0), test);
+    }
+
+
 }
