@@ -1,14 +1,11 @@
-use serde::de::{
-    self, DeserializeSeed, EnumAccess, Error, IntoDeserializer, MapAccess, SeqAccess,
-    VariantAccess, Visitor,
-};
+use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
 use std::borrow::Cow;
-use std::fmt::Display; 
+use std::fmt::Display;
 
 use std::collections::BTreeMap;
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum BuilderDataType<'de> {
     Boolean(bool),
     Integer(i64),
@@ -27,7 +24,14 @@ pub enum BuilderError {
 
 impl Display for BuilderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            BuilderError::InvalidMapAccess => {
+                f.write_fmt(format_args!("Invalid map access sequence."))
+            }
+            BuilderError::InvalidDeserialization(err) => {
+                f.write_fmt(format_args!("Invalid deserialization: {err}"))
+            }
+        }
     }
 }
 
@@ -192,9 +196,9 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
     struct TestComplex {
         a: Vec<TestSimple>,
-        b: BTreeMap<String,TestComplex>
+        b: BTreeMap<String, TestComplex>,
     }
-    
+
     use super::*;
 
     fn fixture_data_simple() -> TestSimple {
@@ -207,12 +211,16 @@ mod tests {
 
     fn fixture_data_complex(req: u32) -> TestComplex {
         TestComplex {
-            a: vec![fixture_data_simple(),fixture_data_simple(),fixture_data_simple()],
+            a: vec![
+                fixture_data_simple(),
+                fixture_data_simple(),
+                fixture_data_simple(),
+            ],
             b: if req == 0 {
                 BTreeMap::new()
             } else {
-                BTreeMap::from([("test".to_owned(),fixture_data_complex(req-1))])
-            }
+                BTreeMap::from([("test".to_owned(), fixture_data_complex(req - 1))])
+            },
         }
     }
 
@@ -274,14 +282,12 @@ mod tests {
         ]);
 
         let data = BuilderDataType::List(vec![
-            BuilderDataType::List(vec![ data.clone(),data.clone(),data.clone() ]),
-            BuilderDataType::Map(vec![])
+            BuilderDataType::List(vec![data.clone(), data.clone(), data.clone()]),
+            BuilderDataType::Map(vec![]),
         ]);
 
         let test: TestComplex = from_data(data).unwrap();
 
         assert_eq!(fixture_data_complex(0), test);
     }
-
-
 }
