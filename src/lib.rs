@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub enum BuilderDataType<'de> {
+    Empty,
     Boolean(bool),
     Integer(i64),
     Unsigned(u64),
@@ -14,7 +15,9 @@ pub enum BuilderDataType<'de> {
     String(Cow<'de, str>),
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
-}
+    Reference(u64),
+    FunctionCall(Vec<BuilderDataType<'de>>),
+ }
 
 #[derive(Debug)]
 pub enum BuilderError {
@@ -45,11 +48,14 @@ impl Error for BuilderError {
         BuilderError::InvalidDeserialization(format!("{msg}"))
     }
 }
-pub struct BuilderDeserializer<'de>(BuilderDataType<'de>);
+pub struct BuilderDeserializer<'de> {
+    refs: BTreeMap< u64, Cow<'de, [BuilderDataType<'de>]> >,
+    data: BuilderDataType<'de>,
+}
 
 impl<'de> BuilderDeserializer<'de> {
     pub fn from_data(input: BuilderDataType<'de>) -> Self {
-        BuilderDeserializer(input)
+        BuilderDeserializer { refs: BTreeMap::new(), data: input }
     }
 }
 
@@ -75,7 +81,8 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.0 {
+        match self.data {
+            BuilderDataType::Empty => todo!(),
             BuilderDataType::Boolean(v) => visitor.visit_bool(v),
             BuilderDataType::Integer(v) => visitor.visit_i64(v),
             BuilderDataType::Unsigned(v) => visitor.visit_u64(v),
@@ -91,6 +98,8 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
             BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
                 data: v.into_iter(),
             }),
+            BuilderDataType::Reference(_) => todo!(),
+            BuilderDataType::FunctionCall(_) => todo!(),
         }
     }
     forward_to_deserialize_any! {
