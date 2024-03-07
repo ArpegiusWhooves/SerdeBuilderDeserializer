@@ -48,22 +48,23 @@ impl Error for BuilderError {
         BuilderError::InvalidDeserialization(format!("{msg}"))
     }
 }
-pub struct BuilderDeserializer<'de> {
+
+pub struct BuilderReferenceMapper<'de> {
     refs: BTreeMap< u64, Cow<'de, [BuilderDataType<'de>]> >,
-    data: BuilderDataType<'de>,
 }
 
-impl<'de> BuilderDeserializer<'de> {
-    pub fn from_data(input: BuilderDataType<'de>) -> Self {
-        BuilderDeserializer { refs: BTreeMap::new(), data: input }
-    }
+pub struct BuilderDeserializer<'de> {
+    data: BuilderDataType<'de>,
+    refs: Option<&'de BuilderReferenceMapper<'de>>,
 }
+
 
 struct BuilderListAccess<'de, I>
 where
     I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
 {
     data: I,
+    refs: Option<&'de BuilderReferenceMapper<'de>>,
 }
 
 struct BuilderMapAccess<'de, I>
@@ -72,6 +73,7 @@ where
 {
     data: I,
     leftover: Option<BuilderDataType<'de>>,
+    refs: Option<&'de BuilderReferenceMapper<'de>>,
 }
 
 impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
@@ -94,9 +96,11 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
             BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
                 data: v.into_iter(),
                 leftover: None,
+                refs: self.refs,
             }),
             BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
                 data: v.into_iter(),
+                refs: self.refs,
             }),
             BuilderDataType::Reference(_) => todo!(),
             BuilderDataType::FunctionCall(_) => todo!(),
@@ -121,7 +125,10 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
-            let v = seed.deserialize(BuilderDeserializer::from_data(a))?;
+            let v = seed.deserialize(BuilderDeserializer{
+                refs: self.refs,
+                data: a
+            })?;
             Ok(Some(v))
         } else {
             Ok(None)
@@ -133,7 +140,10 @@ where
         V: DeserializeSeed<'de>,
     {
         if let Some(leftover) = self.leftover.take() {
-            seed.deserialize(BuilderDeserializer::from_data(leftover))
+            seed.deserialize(BuilderDeserializer{
+                refs: self.refs,
+                data: leftover
+            })
         } else {
             Err(BuilderError::InvalidMapAccess)
         }
@@ -154,8 +164,14 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = None;
-            let va = kseed.deserialize(BuilderDeserializer::from_data(a))?;
-            let vb = vseed.deserialize(BuilderDeserializer::from_data(b))?;
+            let va = kseed.deserialize(BuilderDeserializer{
+                refs: self.refs,
+                data:a
+            })?;
+            let vb = vseed.deserialize(BuilderDeserializer{
+                refs: self.refs,
+                data:b
+            })?;
             Ok(Some((va, vb)))
         } else {
             Ok(None)
@@ -173,8 +189,11 @@ where
     where
         T: DeserializeSeed<'de>,
     {
-        if let Some(a) = self.data.next() {
-            Ok(Some(seed.deserialize(BuilderDeserializer::from_data(a))?))
+        if let Some(data) = self.data.next() {
+            Ok(Some(seed.deserialize(BuilderDeserializer {
+                refs: self.refs,
+                data
+            })?))
         } else {
             Ok(None)
         }
@@ -189,7 +208,12 @@ pub fn from_data<'a, T>(data: BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
 {
-    Ok(T::deserialize(BuilderDeserializer::from_data(data))?)
+    let builder = BuilderDeserializer { 
+        refs: None,
+        data 
+    };
+
+    Ok(T::deserialize(builder)?)
 }
 
 #[cfg(test)]
