@@ -1,9 +1,11 @@
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::fmt::Display;
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub enum BuilderDataType<'de> {
@@ -55,7 +57,7 @@ pub struct BuilderReferenceMapper<'de> {
 
 pub struct BuilderDeserializer<'de> {
     data: BuilderDataType<'de>,
-    refs: Option<&'de BuilderReferenceMapper<'de>>,
+    refs: Option<Rc<BuilderReferenceMapper<'de>>>,
 }
 
 
@@ -64,7 +66,7 @@ where
     I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
 {
     data: I,
-    refs: Option<&'de BuilderReferenceMapper<'de>>,
+    refs: Option<Rc<BuilderReferenceMapper<'de>>>,
 }
 
 struct BuilderMapAccess<'de, I>
@@ -73,7 +75,7 @@ where
 {
     data: I,
     leftover: Option<BuilderDataType<'de>>,
-    refs: Option<&'de BuilderReferenceMapper<'de>>,
+    refs: Option<Rc<BuilderReferenceMapper<'de>>>,
 }
 
 impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
@@ -126,7 +128,7 @@ where
         if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
             let v = seed.deserialize(BuilderDeserializer{
-                refs: self.refs,
+                refs: self.refs.clone(),
                 data: a
             })?;
             Ok(Some(v))
@@ -141,7 +143,7 @@ where
     {
         if let Some(leftover) = self.leftover.take() {
             seed.deserialize(BuilderDeserializer{
-                refs: self.refs,
+                refs: self.refs.clone(),
                 data: leftover
             })
         } else {
@@ -165,11 +167,11 @@ where
         if let Some((a, b)) = self.data.next() {
             self.leftover = None;
             let va = kseed.deserialize(BuilderDeserializer{
-                refs: self.refs,
+                refs: self.refs.clone(),
                 data:a
             })?;
             let vb = vseed.deserialize(BuilderDeserializer{
-                refs: self.refs,
+                refs: self.refs.clone(),
                 data:b
             })?;
             Ok(Some((va, vb)))
@@ -191,7 +193,7 @@ where
     {
         if let Some(data) = self.data.next() {
             Ok(Some(seed.deserialize(BuilderDeserializer {
-                refs: self.refs,
+                refs: self.refs.clone(),
                 data
             })?))
         } else {
