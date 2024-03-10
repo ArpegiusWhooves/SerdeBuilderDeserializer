@@ -52,8 +52,8 @@ impl Error for BuilderError {
 pub struct BuilderDeserializer<'de> {
     data: BuilderDataType<'de>, 
 }
-pub struct BuilderDeserializerRef<'de> {
-    data: &'de BuilderDataType<'de>,
+pub struct BuilderDeserializerRef<'r, 'de> {
+    data: &'r BuilderDataType<'de>,
 }
 
 struct BuilderListAccess<'de, I>
@@ -62,9 +62,10 @@ where
 {
     data: I
 }
-struct BuilderListAccessRef<'de, I>
+struct BuilderListAccessRef<'r, 'de, I>
 where
-    I: Iterator<Item = &'de BuilderDataType<'de>> + ExactSizeIterator,
+    'de:'r ,
+    I: Iterator<Item = &'r BuilderDataType<'de>> + ExactSizeIterator,
 {
     data: I
 }
@@ -76,15 +77,16 @@ where
     leftover: Option<BuilderDataType<'de>>
 }
 
-struct BuilderMapAccessRef<'de, I>
+struct BuilderMapAccessRef<'r, 'de, I>
 where
-    I: Iterator<Item = &'de (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+    'de: 'r,
+    I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
 {
     data: I,
-    leftover: Option<&'de BuilderDataType<'de>>
+    leftover: Option<&'r BuilderDataType<'de>>
 }
 
-impl<'de> serde::Deserializer<'de> for BuilderDeserializerRef<'de> {
+impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
     type Error = BuilderError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -98,8 +100,8 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializerRef<'de> {
             BuilderDataType::Unsigned(v) => visitor.visit_u64(*v),
             BuilderDataType::Number(v) => visitor.visit_f64(*v),
             BuilderDataType::String(c) => match c {
-                Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
-                Cow::Owned(v) => visitor.visit_borrowed_str(v.as_str()),
+                Cow::Borrowed(v) => visitor.visit_borrowed_str(*v),
+                Cow::Owned(v) => visitor.visit_str(v),
             },
             BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccessRef {
                 data: v.iter(),
@@ -149,7 +151,7 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
             BuilderDataType::Reference(r) => {
                 match Rc::try_unwrap(r) {
                     Ok(data) => BuilderDeserializer{data}.deserialize_any(visitor),
-                    Err(_r) => todo!(),
+                    Err(r) => BuilderDeserializerRef{data:&r}.deserialize_any(visitor),
                 }
             },
             BuilderDataType::FunctionCall(_) => todo!(),
@@ -224,9 +226,9 @@ where
     }
 }
 
-impl<'de, I> MapAccess<'de> for BuilderMapAccessRef<'de, I>
+impl<'r, 'de, I> MapAccess<'de> for BuilderMapAccessRef<'r, 'de, I>
 where
-    I: Iterator<Item = &'de (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+    I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
 {
     type Error = BuilderError;
 
@@ -308,9 +310,9 @@ where
         Some(self.data.len())
     }
 }
-impl<'de, I> SeqAccess<'de> for BuilderListAccessRef<'de, I>
+impl<'r, 'de, I> SeqAccess<'de> for BuilderListAccessRef<'r, 'de, I>
 where
-    I: Iterator<Item = &'de BuilderDataType<'de>> + ExactSizeIterator,
+    I: Iterator<Item = &'r BuilderDataType<'de>> + ExactSizeIterator,
 {
     type Error = BuilderError;
 
