@@ -16,8 +16,14 @@ pub enum BuilderDataType<'de> {
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
-    FunctionCall(Vec<BuilderDataType<'de>>),
+    IfThenElse(Vec<BuilderDataType<'de>>),
+    Repeat(Vec<BuilderDataType<'de>>),
+    Range(Vec<BuilderDataType<'de>>),
+    Index,
+    Unique,
 }
+
+
 
 #[derive(Debug)]
 pub enum BuilderError {
@@ -113,7 +119,7 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
             BuilderDataType::Reference(r) => {
                 BuilderDeserializerRef{data:r.as_ref()}.deserialize_any(visitor)
             },
-            BuilderDataType::FunctionCall(_) => todo!(),
+            _ => todo!(),
         }
     }
     forward_to_deserialize_any! {
@@ -137,24 +143,26 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
             BuilderDataType::Integer(v) => visitor.visit_i64(v),
             BuilderDataType::Unsigned(v) => visitor.visit_u64(v),
             BuilderDataType::Number(v) => visitor.visit_f64(v),
-            BuilderDataType::String(c) => match c {
-                Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
-                Cow::Owned(v) => visitor.visit_string(v),
-            },
-            BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
-                data: v.into_iter(),
-                leftover: None,
-            }),
-            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
-                data: v.into_iter(),
-            }),
-            BuilderDataType::Reference(r) => {
+            BuilderDataType::String(c) => 
+                match c {
+                    Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
+                    Cow::Owned(v) => visitor.visit_string(v),
+                },
+            BuilderDataType::Map(v) => 
+                visitor.visit_map(BuilderMapAccess {
+                    data: v.into_iter(),
+                    leftover: None,
+                }),
+            BuilderDataType::List(v) => 
+                visitor.visit_seq(BuilderListAccess {
+                    data: v.into_iter(),
+                }),
+            BuilderDataType::Reference(r) => 
                 match Rc::try_unwrap(r) {
                     Ok(data) => BuilderDeserializer{data}.deserialize_any(visitor),
                     Err(r) => BuilderDeserializerRef{data:&r}.deserialize_any(visitor),
-                }
-            },
-            BuilderDataType::FunctionCall(_) => todo!(),
+                },
+            _ => todo!(),
         }
     }
     forward_to_deserialize_any! {
