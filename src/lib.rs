@@ -1,6 +1,7 @@
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::fmt::Display;
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -16,9 +17,12 @@ pub enum BuilderDataType<'de> {
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
+    Store(Rc<Cell<BuilderDataType<'de>>>),
     IfThenElse(Vec<BuilderDataType<'de>>),
     Repeat(Vec<BuilderDataType<'de>>),
     Range(Vec<BuilderDataType<'de>>),
+    Sum(Vec<BuilderDataType<'de>>),
+    Multiply(Vec<BuilderDataType<'de>>),
     Index,
     Unique,
 }
