@@ -1,9 +1,9 @@
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
 use std::borrow::Cow;
-use std::cell::Cell;
-use std::fmt::Display;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ pub enum BuilderDataType<'de> {
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
-    Store(Rc<Cell<BuilderDataType<'de>>>),
+    Store(Rc<RefCell<BuilderDataType<'de>>>),
     IfThenElse(Vec<BuilderDataType<'de>>),
     Repeat(Vec<BuilderDataType<'de>>),
     Range(Vec<BuilderDataType<'de>>),
@@ -26,8 +26,6 @@ pub enum BuilderDataType<'de> {
     Index,
     Unique,
 }
-
-
 
 #[derive(Debug)]
 pub enum BuilderError {
@@ -60,7 +58,7 @@ impl Error for BuilderError {
 }
 
 pub struct BuilderDeserializer<'de> {
-    data: BuilderDataType<'de>, 
+    data: BuilderDataType<'de>,
 }
 pub struct BuilderDeserializerRef<'r, 'de> {
     data: &'r BuilderDataType<'de>,
@@ -70,21 +68,21 @@ struct BuilderListAccess<'de, I>
 where
     I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
 {
-    data: I
+    data: I,
 }
 struct BuilderListAccessRef<'r, 'de, I>
 where
-    'de:'r ,
+    'de: 'r,
     I: Iterator<Item = &'r BuilderDataType<'de>> + ExactSizeIterator,
 {
-    data: I
+    data: I,
 }
 struct BuilderMapAccess<'de, I>
 where
     I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
 {
     data: I,
-    leftover: Option<BuilderDataType<'de>>
+    leftover: Option<BuilderDataType<'de>>,
 }
 
 struct BuilderMapAccessRef<'r, 'de, I>
@@ -93,7 +91,7 @@ where
     I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
 {
     data: I,
-    leftover: Option<&'r BuilderDataType<'de>>
+    leftover: Option<&'r BuilderDataType<'de>>,
 }
 
 impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
@@ -117,12 +115,14 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
                 data: v.iter(),
                 leftover: None,
             }),
-            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccessRef {
-                data: v.iter(),
-            }),
+            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccessRef { data: v.iter() }),
             BuilderDataType::Reference(r) => {
-                BuilderDeserializerRef{data:r.as_ref()}.deserialize_any(visitor)
-            },
+                BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+            }
+            BuilderDataType::Store(r) => BuilderDeserializer {
+                data: r.as_ref().borrow().clone()
+            }
+            .deserialize_any(visitor),
             _ => todo!(),
         }
     }
@@ -132,7 +132,6 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
         tuple_struct map struct enum identifier ignored_any
     }
 }
-
 
 impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
     type Error = BuilderError;
@@ -147,25 +146,34 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
             BuilderDataType::Integer(v) => visitor.visit_i64(v),
             BuilderDataType::Unsigned(v) => visitor.visit_u64(v),
             BuilderDataType::Number(v) => visitor.visit_f64(v),
-            BuilderDataType::String(c) => 
-                match c {
-                    Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
-                    Cow::Owned(v) => visitor.visit_string(v),
-                },
-            BuilderDataType::Map(v) => 
-                visitor.visit_map(BuilderMapAccess {
-                    data: v.into_iter(),
-                    leftover: None,
-                }),
-            BuilderDataType::List(v) => 
-                visitor.visit_seq(BuilderListAccess {
-                    data: v.into_iter(),
-                }),
-            BuilderDataType::Reference(r) => 
-                match Rc::try_unwrap(r) {
-                    Ok(data) => BuilderDeserializer{data}.deserialize_any(visitor),
-                    Err(r) => BuilderDeserializerRef{data:&r}.deserialize_any(visitor),
-                },
+            BuilderDataType::String(c) => match c {
+                Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
+                Cow::Owned(v) => visitor.visit_string(v),
+            },
+            BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
+                data: v.into_iter(),
+                leftover: None,
+            }),
+            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
+                data: v.into_iter(),
+            }),
+            BuilderDataType::Reference(r) => match Rc::try_unwrap(r) {
+                Ok(data) => BuilderDeserializer { data }.deserialize_any(visitor),
+                Err(r) => BuilderDeserializerRef { data: &r }.deserialize_any(visitor),
+            },
+            BuilderDataType::Store(r) => match Rc::try_unwrap(r) {
+                Ok(c) => BuilderDeserializer {
+                    data: c.into_inner(),
+                }
+                .deserialize_any(visitor),
+                Err(r) => 
+                {
+                    BuilderDeserializer {
+                        data: r.as_ref().borrow().clone()
+                    }
+                    .deserialize_any(visitor)
+                }
+            },
             _ => todo!(),
         }
     }
@@ -188,9 +196,7 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
-            let v = seed.deserialize(BuilderDeserializer{ 
-                data: a
-            })?;
+            let v = seed.deserialize(BuilderDeserializer { data: a })?;
             Ok(Some(v))
         } else {
             Ok(None)
@@ -202,9 +208,7 @@ where
         V: DeserializeSeed<'de>,
     {
         if let Some(leftover) = self.leftover.take() {
-            seed.deserialize(BuilderDeserializer{ 
-                data: leftover
-            })
+            seed.deserialize(BuilderDeserializer { data: leftover })
         } else {
             Err(BuilderError::InvalidMapAccess)
         }
@@ -225,12 +229,8 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = None;
-            let va = kseed.deserialize(BuilderDeserializer{
-                data:a
-            })?;
-            let vb = vseed.deserialize(BuilderDeserializer{
-                data:b
-            })?;
+            let va = kseed.deserialize(BuilderDeserializer { data: a })?;
+            let vb = vseed.deserialize(BuilderDeserializer { data: b })?;
             Ok(Some((va, vb)))
         } else {
             Ok(None)
@@ -250,9 +250,7 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
-            let v = seed.deserialize(BuilderDeserializerRef{ 
-                data: a
-            })?;
+            let v = seed.deserialize(BuilderDeserializerRef { data: a })?;
             Ok(Some(v))
         } else {
             Ok(None)
@@ -264,9 +262,7 @@ where
         V: DeserializeSeed<'de>,
     {
         if let Some(leftover) = self.leftover.take() {
-            seed.deserialize(BuilderDeserializerRef{ 
-                data: leftover
-            })
+            seed.deserialize(BuilderDeserializerRef { data: leftover })
         } else {
             Err(BuilderError::InvalidMapAccess)
         }
@@ -287,12 +283,8 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = None;
-            let va = kseed.deserialize(BuilderDeserializerRef{
-                data:a
-            })?;
-            let vb = vseed.deserialize(BuilderDeserializerRef{
-                data:b
-            })?;
+            let va = kseed.deserialize(BuilderDeserializerRef { data: a })?;
+            let vb = vseed.deserialize(BuilderDeserializerRef { data: b })?;
             Ok(Some((va, vb)))
         } else {
             Ok(None)
@@ -310,9 +302,7 @@ where
         T: DeserializeSeed<'de>,
     {
         if let Some(data) = self.data.next() {
-            Ok(Some(seed.deserialize(BuilderDeserializer {
-                data
-            })?))
+            Ok(Some(seed.deserialize(BuilderDeserializer { data })?))
         } else {
             Ok(None)
         }
@@ -333,9 +323,7 @@ where
         T: DeserializeSeed<'de>,
     {
         if let Some(data) = self.data.next() {
-            Ok(Some(seed.deserialize(BuilderDeserializerRef {
-                data
-            })?))
+            Ok(Some(seed.deserialize(BuilderDeserializerRef { data })?))
         } else {
             Ok(None)
         }
@@ -350,9 +338,7 @@ pub fn from_data<'a, T>(data: BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
 {
-    let builder = BuilderDeserializer {
-        data 
-    };
+    let builder = BuilderDeserializer { data };
 
     Ok(T::deserialize(builder)?)
 }
@@ -449,20 +435,19 @@ mod tests {
 
     #[test]
     fn test_complex() {
-        let data = BuilderDataType::Reference( Rc::new(BuilderDataType::List(vec![
+        let data = BuilderDataType::Reference(Rc::new(BuilderDataType::List(vec![
             BuilderDataType::Integer(123),
             BuilderDataType::Boolean(true),
             BuilderDataType::String(Cow::from("test")),
         ])));
 
-        let data = BuilderDataType::Reference( Rc::new(BuilderDataType::List(vec![
-            data.clone(), data.clone(), data.clone()
+        let data = BuilderDataType::Reference(Rc::new(BuilderDataType::List(vec![
+            data.clone(),
+            data.clone(),
+            data.clone(),
         ])));
 
-        let data = BuilderDataType::List(vec![
-            data,
-            BuilderDataType::Map(vec![]),
-        ]);
+        let data = BuilderDataType::List(vec![data, BuilderDataType::Map(vec![])]);
 
         let test: TestComplex = from_data(data).unwrap();
 
