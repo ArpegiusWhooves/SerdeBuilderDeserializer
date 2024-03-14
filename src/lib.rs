@@ -27,10 +27,30 @@ pub enum BuilderDataType<'de> {
     Unique,
 }
 
+impl<'de> BuilderDataType<'de> {
+    
+    fn check_true(&self)->bool {
+        match self {
+            BuilderDataType::Empty => false,
+            BuilderDataType::Boolean(b) => *b,
+            BuilderDataType::Integer(v) => *v != 0,
+            BuilderDataType::Unsigned(v) => *v != 0,
+            BuilderDataType::Number(v) => *v != 0.0,
+            BuilderDataType::String(s) => !s.is_empty(),
+            BuilderDataType::Map(c) => !c.is_empty(),
+            BuilderDataType::List(c) => !c.is_empty(),
+            BuilderDataType::Reference(r) => r.as_ref().check_true(),
+            BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
+            _ => false
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum BuilderError {
     InvalidMapAccess,
     InvalidDeserialization(String),
+    InvalidFunctionArgument,
 }
 
 impl Display for BuilderError {
@@ -42,6 +62,7 @@ impl Display for BuilderError {
             BuilderError::InvalidDeserialization(err) => {
                 f.write_fmt(format_args!("Invalid deserialization: {err}"))
             }
+            BuilderError::InvalidFunctionArgument => todo!(),
         }
     }
 }
@@ -123,6 +144,17 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
                 data: r.as_ref().borrow().clone()
             }
             .deserialize_any(visitor),
+            BuilderDataType::IfThenElse(v) => {
+                let mut i = v.iter();
+                let Some(condition) = i.next() else { return Err(BuilderError::InvalidFunctionArgument); };
+                let Some(if_true) = i.next() else { return Err(BuilderError::InvalidFunctionArgument); };
+                let Some(if_false) = i.next() else { return Err(BuilderError::InvalidFunctionArgument); };
+                if condition.check_true() {
+                    BuilderDeserializerRef { data: if_true }.deserialize_any(visitor)
+                } else {
+                    BuilderDeserializerRef { data: if_false }.deserialize_any(visitor)
+                }
+            },
             _ => todo!(),
         }
     }
