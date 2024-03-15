@@ -27,25 +27,6 @@ pub enum BuilderDataType<'de> {
     Unique,
 }
 
-impl<'de> BuilderDataType<'de> {
-    
-    fn check_true(&self)->bool {
-        match self {
-            BuilderDataType::Empty => false,
-            BuilderDataType::Boolean(b) => *b,
-            BuilderDataType::Integer(v) => *v != 0,
-            BuilderDataType::Unsigned(v) => *v != 0,
-            BuilderDataType::Number(v) => *v != 0.0,
-            BuilderDataType::String(s) => !s.is_empty(),
-            BuilderDataType::Map(c) => !c.is_empty(),
-            BuilderDataType::List(c) => !c.is_empty(),
-            BuilderDataType::Reference(r) => r.as_ref().check_true(),
-            BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
-            _ => false
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum BuilderError {
     InvalidMapAccess,
@@ -115,6 +96,97 @@ where
     leftover: Option<&'r BuilderDataType<'de>>,
 }
 
+impl<'de> BuilderDataType<'de> {
+    fn if_then_else_ref<'a>(
+        v: &'a Vec<BuilderDataType<'de>>,
+    ) -> Result<&'a BuilderDataType<'de>, BuilderError> {
+        let mut i = v.iter();
+        let Some(condition) = i.next() else {
+            return Err(BuilderError::InvalidFunctionArgument);
+        };
+        let Some(if_true) = i.next() else {
+            return Err(BuilderError::InvalidFunctionArgument);
+        };
+        let Some(if_false) = i.next() else {
+            return Err(BuilderError::InvalidFunctionArgument);
+        };
+        if condition.check_true() {
+            Ok(if_true)
+        } else {
+            Ok(if_false)
+        }
+    }
+
+    fn if_then_else(v: Vec<BuilderDataType<'de>>) -> Result<BuilderDataType<'de>, BuilderError> {
+        let mut i = v.into_iter();
+        let Some(condition) = i.next() else {
+            return Err(BuilderError::InvalidFunctionArgument);
+        };
+        let Some(if_true) = i.next() else {
+            return Err(BuilderError::InvalidFunctionArgument);
+        };
+        let Some(if_false) = i.next() else {
+            return Err(BuilderError::InvalidFunctionArgument);
+        };
+        if condition.check_true() {
+            Ok(if_true)
+        } else {
+            Ok(if_false)
+        }
+    }
+
+    pub fn check_true(&self) -> bool {
+        match self {
+            BuilderDataType::Empty => false,
+            BuilderDataType::Boolean(b) => *b,
+            BuilderDataType::Integer(v) => *v != 0,
+            BuilderDataType::Unsigned(v) => *v != 0,
+            BuilderDataType::Number(v) => *v != 0.0,
+            BuilderDataType::String(s) => !s.is_empty(),
+            BuilderDataType::Map(c) => !c.is_empty(),
+            BuilderDataType::List(c) => !c.is_empty(),
+            BuilderDataType::Reference(r) => r.as_ref().check_true(),
+            BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
+            _ => false,
+        }
+    }
+
+    pub fn to_unsigned(&self) -> u64 {
+        match self {
+            BuilderDataType::Empty => 0,
+            BuilderDataType::Boolean(v) => {
+                if *v {
+                    1
+                } else {
+                    0
+                }
+            }
+            BuilderDataType::Integer(v) => (*v).max(0) as u64,
+            BuilderDataType::Unsigned(v) => *v,
+            BuilderDataType::Number(v) => {
+                if v.is_sign_positive() && v.is_normal() {
+                    *v as u64
+                } else {
+                    0
+                }
+            }
+            BuilderDataType::String(v) => v.parse().unwrap_or(0),
+            BuilderDataType::Map(v) => v.len() as u64,
+            BuilderDataType::List(v) => v.len() as u64,
+            BuilderDataType::Reference(r) => r.as_ref().to_unsigned(),
+            BuilderDataType::Store(r) => r.as_ref().borrow().to_unsigned(),
+            BuilderDataType::IfThenElse(v) => {
+                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
+                    r.to_unsigned()
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+}
+
 impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
     type Error = BuilderError;
 
@@ -141,20 +213,13 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
                 BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
             }
             BuilderDataType::Store(r) => BuilderDeserializer {
-                data: r.as_ref().borrow().clone()
+                data: r.as_ref().borrow().clone(),
             }
             .deserialize_any(visitor),
-            BuilderDataType::IfThenElse(v) => {
-                let mut i = v.iter();
-                let Some(condition) = i.next() else { return Err(BuilderError::InvalidFunctionArgument); };
-                let Some(if_true) = i.next() else { return Err(BuilderError::InvalidFunctionArgument); };
-                let Some(if_false) = i.next() else { return Err(BuilderError::InvalidFunctionArgument); };
-                if condition.check_true() {
-                    BuilderDeserializerRef { data: if_true }.deserialize_any(visitor)
-                } else {
-                    BuilderDeserializerRef { data: if_false }.deserialize_any(visitor)
-                }
-            },
+            BuilderDataType::IfThenElse(v) => BuilderDeserializerRef {
+                data: BuilderDataType::if_then_else_ref(v)?,
+            }
+            .deserialize_any(visitor),
             _ => todo!(),
         }
     }
@@ -198,14 +263,15 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                     data: c.into_inner(),
                 }
                 .deserialize_any(visitor),
-                Err(r) => 
-                {
-                    BuilderDeserializer {
-                        data: r.as_ref().borrow().clone()
-                    }
-                    .deserialize_any(visitor)
+                Err(r) => BuilderDeserializer {
+                    data: r.as_ref().borrow().clone(),
                 }
+                .deserialize_any(visitor),
             },
+            BuilderDataType::IfThenElse(v) => BuilderDeserializer {
+                data: BuilderDataType::if_then_else(v)?,
+            }
+            .deserialize_any(visitor),
             _ => todo!(),
         }
     }
