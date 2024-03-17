@@ -576,10 +576,9 @@ mod tests {
             BuilderDataType::String(Cow::from("test")),
         ])));
 
-        let data = BuilderDataType::Reference(Rc::new(BuilderDataType::List(vec![
-            data.clone(),
-            data.clone(),
-            data.clone(),
+        let data = BuilderDataType::Reference(Rc::new(BuilderDataType::Repeat(vec![
+            BuilderDataType::Unsigned(3),
+            data,
         ])));
 
         let data = BuilderDataType::List(vec![data, BuilderDataType::Map(vec![])]);
