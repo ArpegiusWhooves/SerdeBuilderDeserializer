@@ -68,32 +68,36 @@ pub struct BuilderDeserializerRef<'r, 'de> {
 
 struct BuilderListAccess<'de, I>
 where
-    I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
+    I: Iterator<Item = BuilderDataType<'de>>,
 {
     data: I,
+    size_hint: Option<usize>,
 }
 struct BuilderListAccessRef<'r, 'de, I>
 where
     'de: 'r,
-    I: Iterator<Item = &'r BuilderDataType<'de>> + ExactSizeIterator,
+    I: Iterator<Item = &'r BuilderDataType<'de>>,
 {
     data: I,
+    size_hint: Option<usize>,
 }
 struct BuilderMapAccess<'de, I>
 where
-    I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+    I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
     data: I,
     leftover: Option<BuilderDataType<'de>>,
+    size_hint: Option<usize>,
 }
 
 struct BuilderMapAccessRef<'r, 'de, I>
 where
     'de: 'r,
-    I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+    I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
     data: I,
     leftover: Option<&'r BuilderDataType<'de>>,
+    size_hint: Option<usize>,
 }
 
 impl<'de> BuilderDataType<'de> {
@@ -147,12 +151,6 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::List(c) => !c.is_empty(),
             BuilderDataType::Reference(r) => r.as_ref().check_true(),
             BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
-            BuilderDataType::IfThenElse(v) => {
-                BuilderDataType::if_then_else_ref(v).map(|r|r.check_true()).unwrap_or(false)
-            },
-            BuilderDataType::Repeat(v) => {
-                v.first().map(|r|r.check_true()).unwrap_or(false)
-            }
             _ => false,
         }
     }
@@ -187,9 +185,6 @@ impl<'de> BuilderDataType<'de> {
                 } else {
                     0
                 }
-            },
-            BuilderDataType::Repeat(v) => {
-                v.first().map(|r|r.to_unsigned()).unwrap_or(0)
             }
             _ => 0,
         }
@@ -216,8 +211,12 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
             BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccessRef {
                 data: v.iter(),
                 leftover: None,
+                size_hint: Some(v.len()),
             }),
-            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccessRef { data: v.iter() }),
+            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccessRef {
+                data: v.iter(),
+                size_hint: Some(v.len()),
+            }),
             BuilderDataType::Reference(r) => {
                 BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
             }
@@ -229,11 +228,6 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
                 data: BuilderDataType::if_then_else_ref(v)?,
             }
             .deserialize_any(visitor),
-            BuilderDataType::Repeat(v) =>  {
-                let mut it = v.iter();
-                let times = it.next().map_or(0, |r|r.to_unsigned());
-                visitor.visit_seq(BuilderListAccessRef { data: it.cycle().take(times as usize) })
-            },
             _ => todo!(),
         }
     }
@@ -264,9 +258,11 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
             BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
                 data: v.into_iter(),
                 leftover: None,
+                size_hint: Some(v.len()),
             }),
             BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
                 data: v.into_iter(),
+                size_hint: Some(v.len()),
             }),
             BuilderDataType::Reference(r) => match Rc::try_unwrap(r) {
                 Ok(data) => BuilderDeserializer { data }.deserialize_any(visitor),
@@ -286,11 +282,6 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                 data: BuilderDataType::if_then_else(v)?,
             }
             .deserialize_any(visitor),
-            BuilderDataType::Repeat(v) =>  {
-                let mut it = v.iter();
-                let times = it.next().map_or(0, |r|r.to_unsigned());
-                visitor.visit_seq(BuilderListAccessRef { data: it.cycle().take(times) })
-            },
             _ => todo!(),
         }
     }
@@ -303,7 +294,7 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
 
 impl<'de, I> MapAccess<'de> for BuilderMapAccess<'de, I>
 where
-    I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+    I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
     type Error = BuilderError;
 
@@ -332,7 +323,7 @@ where
     }
 
     fn size_hint(&self) -> Option<usize> {
-        Some(self.data.len())
+        self.size_hint
     }
 
     fn next_entry_seed<K, V>(
@@ -357,7 +348,7 @@ where
 
 impl<'r, 'de, I> MapAccess<'de> for BuilderMapAccessRef<'r, 'de, I>
 where
-    I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)> + ExactSizeIterator,
+    I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
     type Error = BuilderError;
 
@@ -386,7 +377,7 @@ where
     }
 
     fn size_hint(&self) -> Option<usize> {
-        Some(self.data.len())
+        self.size_hint
     }
 
     fn next_entry_seed<K, V>(
@@ -410,7 +401,7 @@ where
 }
 impl<'de, I> SeqAccess<'de> for BuilderListAccess<'de, I>
 where
-    I: Iterator<Item = BuilderDataType<'de>> + ExactSizeIterator,
+    I: Iterator<Item = BuilderDataType<'de>>,
 {
     type Error = BuilderError;
 
@@ -426,12 +417,12 @@ where
     }
 
     fn size_hint(&self) -> Option<usize> {
-        Some(self.data.len())
+        self.size_hint
     }
 }
 impl<'r, 'de, I> SeqAccess<'de> for BuilderListAccessRef<'r, 'de, I>
 where
-    I: Iterator<Item = &'r BuilderDataType<'de>> + ExactSizeIterator,
+    I: Iterator<Item = &'r BuilderDataType<'de>>,
 {
     type Error = BuilderError;
 
@@ -447,7 +438,7 @@ where
     }
 
     fn size_hint(&self) -> Option<usize> {
-        Some(self.data.len())
+        self.size_hint
     }
 }
 
