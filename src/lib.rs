@@ -151,6 +151,10 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::List(c) => !c.is_empty(),
             BuilderDataType::Reference(r) => r.as_ref().check_true(),
             BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
+            BuilderDataType::IfThenElse(v) => BuilderDataType::if_then_else_ref(v)
+                .map(|r| r.check_true())
+                .unwrap_or(false),
+            BuilderDataType::Repeat(v) => v.first().map(|r| r.check_true()).unwrap_or(false),
             _ => false,
         }
     }
@@ -186,6 +190,7 @@ impl<'de> BuilderDataType<'de> {
                     0
                 }
             }
+            BuilderDataType::Repeat(v) => v.first().map(|r| r.to_unsigned()).unwrap_or(0),
             _ => 0,
         }
     }
@@ -228,6 +233,14 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
                 data: BuilderDataType::if_then_else_ref(v)?,
             }
             .deserialize_any(visitor),
+            BuilderDataType::Repeat(v) => {
+                let mut it = v.iter();
+                let times = it.next().map_or(0, |r| r.to_unsigned());
+                visitor.visit_seq(BuilderListAccessRef {
+                    data: it.cycle().take(times as usize),
+                    size_hint: Some(times as usize),
+                })
+            }
             _ => todo!(),
         }
     }
@@ -255,15 +268,21 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                 Cow::Borrowed(v) => visitor.visit_borrowed_str(v),
                 Cow::Owned(v) => visitor.visit_string(v),
             },
-            BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccess {
-                data: v.into_iter(),
-                leftover: None,
-                size_hint: Some(v.len()),
-            }),
-            BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccess {
-                data: v.into_iter(),
-                size_hint: Some(v.len()),
-            }),
+            BuilderDataType::Map(v) => {
+                let size_hint = Some(v.len());
+                visitor.visit_map(BuilderMapAccess {
+                    data: v.into_iter(),
+                    leftover: None,
+                    size_hint,
+                })
+            }
+            BuilderDataType::List(v) => {
+                let size_hint = Some(v.len());
+                visitor.visit_seq(BuilderListAccess {
+                    data: v.into_iter(),
+                    size_hint,
+                })
+            }
             BuilderDataType::Reference(r) => match Rc::try_unwrap(r) {
                 Ok(data) => BuilderDeserializer { data }.deserialize_any(visitor),
                 Err(r) => BuilderDeserializerRef { data: &r }.deserialize_any(visitor),
@@ -282,6 +301,14 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                 data: BuilderDataType::if_then_else(v)?,
             }
             .deserialize_any(visitor),
+            BuilderDataType::Repeat(v) => {
+                let mut it = v.iter();
+                let times = it.next().map_or(0, |r| r.to_unsigned());
+                visitor.visit_seq(BuilderListAccessRef {
+                    data: it.cycle().take(times as usize),
+                    size_hint: Some(times as usize),
+                })
+            }
             _ => todo!(),
         }
     }
