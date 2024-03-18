@@ -18,6 +18,7 @@ pub enum BuilderDataType<'de> {
     List(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
+    Take(Rc<RefCell<BuilderDataType<'de>>>),
     IfThenElse(Vec<BuilderDataType<'de>>),
     Repeat(Vec<BuilderDataType<'de>>),
     Range(Vec<BuilderDataType<'de>>),
@@ -139,6 +140,29 @@ impl<'de> BuilderDataType<'de> {
         }
     }
 
+    pub fn take_one(&mut self) -> BuilderDataType<'de> {
+        match self {
+            BuilderDataType::Empty => BuilderDataType::Empty,
+            BuilderDataType::Boolean(b) => {
+                let result = BuilderDataType::Boolean(*b);
+                if *b {*b = false};
+                result
+            },
+            BuilderDataType::Integer(b) => {
+                let result = BuilderDataType::Integer(*b);
+                if *b > 0 {*b -= 1} else {*b=0}
+                result
+            },
+            BuilderDataType::Unsigned(b) => {
+                let result = BuilderDataType::Unsigned(*b);
+                if *b > 0 {*b -= 1 }
+                result
+            },
+            BuilderDataType::List(c) => c.pop().unwrap_or(BuilderDataType::Empty),
+            _ => BuilderDataType::Empty,
+        }
+    }
+
     pub fn check_true(&self) -> bool {
         match self {
             BuilderDataType::Empty => false,
@@ -151,6 +175,7 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::List(c) => !c.is_empty(),
             BuilderDataType::Reference(r) => r.as_ref().check_true(),
             BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
+            BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().check_true(),
             BuilderDataType::IfThenElse(v) => BuilderDataType::if_then_else_ref(v)
                 .map(|r| r.check_true())
                 .unwrap_or(false),
@@ -183,6 +208,7 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::List(v) => v.len() as u64,
             BuilderDataType::Reference(r) => r.as_ref().to_unsigned(),
             BuilderDataType::Store(r) => r.as_ref().borrow().to_unsigned(),
+            BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_unsigned(),
             BuilderDataType::IfThenElse(v) => {
                 if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
                     r.to_unsigned()
@@ -224,11 +250,14 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
             }),
             BuilderDataType::Reference(r) => {
                 BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
-            }
+            },
             BuilderDataType::Store(r) => BuilderDeserializer {
                 data: r.as_ref().borrow().clone(),
             }
             .deserialize_any(visitor),
+            BuilderDataType::Take(r) =>{
+                BuilderDeserializer { data: r.as_ref().borrow_mut().take_one() }.deserialize_any(visitor)
+            },
             BuilderDataType::IfThenElse(v) => BuilderDeserializerRef {
                 data: BuilderDataType::if_then_else_ref(v)?,
             }
@@ -296,6 +325,9 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                     data: r.as_ref().borrow().clone(),
                 }
                 .deserialize_any(visitor),
+            },
+            BuilderDataType::Take(r) =>{
+                BuilderDeserializer { data: r.as_ref().borrow_mut().take_one() }.deserialize_any(visitor)
             },
             BuilderDataType::IfThenElse(v) => BuilderDeserializer {
                 data: BuilderDataType::if_then_else(v)?,
