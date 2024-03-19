@@ -220,6 +220,32 @@ impl<'de> BuilderDataType<'de> {
             _ => 0,
         }
     }
+    pub fn to_float(&self) -> f64 {
+
+        match self {
+            BuilderDataType::Empty => 0.0,
+            BuilderDataType::Boolean(v) => if *v {1.0} else {0.0},
+            BuilderDataType::Integer(v) => *v as f64,
+            BuilderDataType::Unsigned(v) => *v as f64,
+            BuilderDataType::Number(v) => *v,
+            BuilderDataType::String(v) => v.parse().unwrap_or(0.0),
+            BuilderDataType::Map(v) => v.len() as f64,
+            BuilderDataType::List(v) => v.len() as f64,
+            BuilderDataType::Reference(r) => r.as_ref().to_float(),
+            BuilderDataType::Store(r) => r.as_ref().borrow().to_float(),
+            BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_float(),
+            BuilderDataType::IfThenElse(v) => {
+                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
+                    r.to_float()
+                } else {
+                    0.0
+                }
+            }
+            BuilderDataType::Repeat(v) => v.first().map(|r| r.to_float()).unwrap_or(0.0),
+            _ => 0.0,
+        }
+
+    }
 }
 
 impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
