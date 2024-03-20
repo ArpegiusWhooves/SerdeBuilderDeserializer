@@ -145,19 +145,27 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::Empty => BuilderDataType::Empty,
             BuilderDataType::Boolean(b) => {
                 let result = BuilderDataType::Boolean(*b);
-                if *b {*b = false};
+                if *b {
+                    *b = false
+                };
                 result
-            },
+            }
             BuilderDataType::Integer(b) => {
                 let result = BuilderDataType::Integer(*b);
-                if *b > 0 {*b -= 1} else {*b=0}
+                if *b > 0 {
+                    *b -= 1
+                } else {
+                    *b = 0
+                }
                 result
-            },
+            }
             BuilderDataType::Unsigned(b) => {
                 let result = BuilderDataType::Unsigned(*b);
-                if *b > 0 {*b -= 1 }
+                if *b > 0 {
+                    *b -= 1
+                }
                 result
-            },
+            }
             BuilderDataType::List(c) => c.pop().unwrap_or(BuilderDataType::Empty),
             _ => BuilderDataType::Empty,
         }
@@ -261,7 +269,13 @@ impl<'de> BuilderDataType<'de> {
     pub fn to_float(&self) -> f64 {
         match self {
             BuilderDataType::Empty => 0.0,
-            BuilderDataType::Boolean(v) => if *v {1.0} else {0.0},
+            BuilderDataType::Boolean(v) => {
+                if *v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             BuilderDataType::Integer(v) => *v as f64,
             BuilderDataType::Unsigned(v) => *v as f64,
             BuilderDataType::Number(v) => *v,
@@ -285,14 +299,45 @@ impl<'de> BuilderDataType<'de> {
 
     pub fn to_string(&self) -> Cow<'de, str> {
         match self {
-            BuilderDataType::Empty => Cow::Borrowed(""),
-            BuilderDataType::Boolean(v) => if *v {Cow::Borrowed("true")} else {Cow::Borrowed("false")},
-            BuilderDataType::Integer(v) => Cow::Owned(format!("{}",*v)),
-            BuilderDataType::Unsigned(v) =>  Cow::Owned(format!("{}",*v)),
-            BuilderDataType::Number(_) =>  Cow::Owned(format!("{}",*v)),
-            BuilderDataType::String(v) => *v,
-            BuilderDataType::Map(v) => v.iter().map(|e| format!("{}:{}",e.0.to_string(),e.1.to_string())).join(","),
-            BuilderDataType::List(v) => v.iter().map(|e| e.to_string()).join(","),
+            BuilderDataType::Empty => Cow::Owned(String::new()),
+            BuilderDataType::Boolean(v) => {
+                if *v {
+                    Cow::Borrowed("true")
+                } else {
+                    Cow::Borrowed("false")
+                }
+            }
+            BuilderDataType::Integer(v) => Cow::Owned(format!("{}", *v)),
+            BuilderDataType::Unsigned(v) => Cow::Owned(format!("{}", *v)),
+            BuilderDataType::Number(v) => Cow::Owned(format!("{}", *v)),
+            BuilderDataType::String(v) => v.clone(),
+            BuilderDataType::Map(v) => v.iter().fold(Cow::Owned(String::new()), |s, e| {
+                let key = e.0.to_string();
+                if key.is_empty() {
+                    return s;
+                }
+                let value = e.1.to_string();
+                if value.is_empty() {
+                    return s;
+                }
+                if s.is_empty() {
+                    Cow::Owned(format!("{key}:{value}"))
+                } else {
+                    Cow::Owned(format!("{s},{key}:{value}"))
+                }
+            }),
+            BuilderDataType::List(v) => v.iter().fold(Cow::Owned(String::new()), |s, e| {
+                if s.is_empty() {
+                    e.to_string()
+                } else {
+                    let value = e.to_string();
+                    if value.is_empty() {
+                        s
+                    } else {
+                        Cow::Owned(format!("{s},{value}"))
+                    }
+                }
+            }),
             BuilderDataType::Reference(r) => r.as_ref().to_string(),
             BuilderDataType::Store(r) => r.as_ref().borrow().to_string(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_string(),
@@ -300,13 +345,12 @@ impl<'de> BuilderDataType<'de> {
                 if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
                     r.to_string()
                 } else {
-                    Cow::Borrowed("")
+                    Cow::Owned(String::new())
                 }
-            },
-            _ => Cow::Borrowed(""),
+            }
+            _ => Cow::Owned(String::new()),
         }
     }
-
 }
 
 impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
@@ -337,14 +381,15 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
             }),
             BuilderDataType::Reference(r) => {
                 BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
-            },
+            }
             BuilderDataType::Store(r) => BuilderDeserializer {
                 data: r.as_ref().borrow().clone(),
             }
             .deserialize_any(visitor),
-            BuilderDataType::Take(r) =>{
-                BuilderDeserializer { data: r.as_ref().borrow_mut().take_one() }.deserialize_any(visitor)
-            },
+            BuilderDataType::Take(r) => BuilderDeserializer {
+                data: r.as_ref().borrow_mut().take_one(),
+            }
+            .deserialize_any(visitor),
             BuilderDataType::IfThenElse(v) => BuilderDeserializerRef {
                 data: BuilderDataType::if_then_else_ref(v)?,
             }
@@ -413,9 +458,10 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                 }
                 .deserialize_any(visitor),
             },
-            BuilderDataType::Take(r) =>{
-                BuilderDeserializer { data: r.as_ref().borrow_mut().take_one() }.deserialize_any(visitor)
-            },
+            BuilderDataType::Take(r) => BuilderDeserializer {
+                data: r.as_ref().borrow_mut().take_one(),
+            }
+            .deserialize_any(visitor),
             BuilderDataType::IfThenElse(v) => BuilderDeserializer {
                 data: BuilderDataType::if_then_else(v)?,
             }
