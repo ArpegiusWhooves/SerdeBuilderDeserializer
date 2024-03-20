@@ -283,6 +283,30 @@ impl<'de> BuilderDataType<'de> {
         }
     }
 
+    pub fn to_string(&self) -> Cow<'de, str> {
+        match self {
+            BuilderDataType::Empty => Cow::Borrowed(""),
+            BuilderDataType::Boolean(v) => if *v {Cow::Borrowed("true")} else {Cow::Borrowed("false")},
+            BuilderDataType::Integer(v) => Cow::Owned(format!("{}",*v)),
+            BuilderDataType::Unsigned(v) =>  Cow::Owned(format!("{}",*v)),
+            BuilderDataType::Number(_) =>  Cow::Owned(format!("{}",*v)),
+            BuilderDataType::String(v) => *v,
+            BuilderDataType::Map(v) => v.iter().map(|e| format!("{}:{}",e.0.to_string(),e.1.to_string())).join(","),
+            BuilderDataType::List(v) => v.iter().map(|e| e.to_string()).join(","),
+            BuilderDataType::Reference(r) => r.as_ref().to_string(),
+            BuilderDataType::Store(r) => r.as_ref().borrow().to_string(),
+            BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_string(),
+            BuilderDataType::IfThenElse(v) => {
+                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
+                    r.to_string()
+                } else {
+                    Cow::Borrowed("")
+                }
+            },
+            _ => Cow::Borrowed(""),
+        }
+    }
+
 }
 
 impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
