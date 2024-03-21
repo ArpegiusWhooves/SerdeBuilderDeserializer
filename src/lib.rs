@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::Display;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 #[derive(Debug, Clone)]
 pub enum BuilderDataType<'de> {
@@ -17,6 +17,7 @@ pub enum BuilderDataType<'de> {
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
+    SelfReference(Weak<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
     Take(Rc<RefCell<BuilderDataType<'de>>>),
     IfThenElse(Vec<BuilderDataType<'de>>),
@@ -33,6 +34,7 @@ pub enum BuilderError {
     InvalidMapAccess,
     InvalidDeserialization(String),
     InvalidFunctionArgument,
+    InvalidSelfRefrence,
 }
 
 impl Display for BuilderError {
@@ -45,6 +47,7 @@ impl Display for BuilderError {
                 f.write_fmt(format_args!("Invalid deserialization: {err}"))
             }
             BuilderError::InvalidFunctionArgument => todo!(),
+            BuilderError::InvalidSelfRefrence => todo!(),
         }
     }
 }
@@ -182,6 +185,13 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::Map(c) => !c.is_empty(),
             BuilderDataType::List(c) => !c.is_empty(),
             BuilderDataType::Reference(r) => r.as_ref().check_true(),
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    r.as_ref().check_true()
+                } else {
+                    false
+                }
+            }
             BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().check_true(),
             BuilderDataType::IfThenElse(v) => BuilderDataType::if_then_else_ref(v)
@@ -215,6 +225,13 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::Map(v) => v.len() as u64,
             BuilderDataType::List(v) => v.len() as u64,
             BuilderDataType::Reference(r) => r.as_ref().to_unsigned(),
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    r.as_ref().to_unsigned()
+                } else {
+                    0
+                }
+            }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_unsigned(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_unsigned(),
             BuilderDataType::IfThenElse(v) => {
@@ -252,6 +269,13 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::Map(v) => v.len() as i64,
             BuilderDataType::List(v) => v.len() as i64,
             BuilderDataType::Reference(r) => r.as_ref().to_signed(),
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    r.as_ref().to_signed()
+                } else {
+                    0
+                }
+            }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_signed(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_signed(),
             BuilderDataType::IfThenElse(v) => {
@@ -283,6 +307,13 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::Map(v) => v.len() as f64,
             BuilderDataType::List(v) => v.len() as f64,
             BuilderDataType::Reference(r) => r.as_ref().to_float(),
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    r.as_ref().to_float()
+                } else {
+                    0.0
+                }
+            }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_float(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_float(),
             BuilderDataType::IfThenElse(v) => {
@@ -339,6 +370,13 @@ impl<'de> BuilderDataType<'de> {
                 }
             }),
             BuilderDataType::Reference(r) => r.as_ref().to_string(),
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    r.as_ref().to_string()
+                } else {
+                    Cow::Owned(String::new())
+                }
+            }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_string(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_string(),
             BuilderDataType::IfThenElse(v) => {
@@ -381,6 +419,13 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
             }),
             BuilderDataType::Reference(r) => {
                 BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+            }
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidSelfRefrence)
+                }
             }
             BuilderDataType::Store(r) => BuilderDeserializer {
                 data: r.as_ref().borrow().clone(),
@@ -444,10 +489,23 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                     size_hint,
                 })
             }
-            BuilderDataType::Reference(r) => match Rc::try_unwrap(r) {
-                Ok(data) => BuilderDeserializer { data }.deserialize_any(visitor),
-                Err(r) => BuilderDeserializerRef { data: &r }.deserialize_any(visitor),
-            },
+            BuilderDataType::Reference(r) => {
+                if Rc::weak_count(&r) > 0 {
+                    BuilderDeserializerRef { data: &r }.deserialize_any(visitor)
+                } else {
+                    match Rc::try_unwrap(r) {
+                        Ok(data) => BuilderDeserializer { data }.deserialize_any(visitor),
+                        Err(r) => BuilderDeserializerRef { data: &r }.deserialize_any(visitor),
+                    }
+                }
+            }
+            BuilderDataType::SelfReference(w) => {
+                if let Some(r) = w.upgrade() {
+                    BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidSelfRefrence)
+                }
+            }
             BuilderDataType::Store(r) => match Rc::try_unwrap(r) {
                 Ok(c) => BuilderDeserializer {
                     data: c.into_inner(),
@@ -643,6 +701,15 @@ where
     Ok(T::deserialize(builder)?)
 }
 
+pub fn from_ref<'a, T>(data: &BuilderDataType<'a>) -> Result<T, BuilderError>
+where
+    T: Deserialize<'a>,
+{
+    let builder = BuilderDeserializerRef { data };
+
+    Ok(T::deserialize(builder)?)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -751,5 +818,39 @@ mod tests {
         let test: TestComplex = from_data(data).unwrap();
 
         assert_eq!(fixture_data_complex(0), test);
+    }
+
+    #[test]
+    fn test_complex_nested() {
+        let data = BuilderDataType::Reference(Rc::new(BuilderDataType::List(vec![
+            BuilderDataType::Integer(123),
+            BuilderDataType::Boolean(true),
+            BuilderDataType::String(Cow::from("test")),
+        ])));
+
+        let data = BuilderDataType::Reference(Rc::new(BuilderDataType::Repeat(vec![
+            BuilderDataType::Unsigned(3),
+            data,
+        ])));
+
+        let nest_count = Rc::new(RefCell::new(BuilderDataType::Integer(3)));
+
+        let data = Rc::new_cyclic(|self_reference| {
+            BuilderDataType::List(vec![
+                data,
+                BuilderDataType::IfThenElse(vec![
+                    BuilderDataType::Take(nest_count),
+                    BuilderDataType::Map(vec![(
+                        BuilderDataType::String(Cow::from("test")),
+                        BuilderDataType::SelfReference(self_reference.clone()),
+                    )]),
+                    BuilderDataType::Map(vec![]),
+                ]),
+            ])
+        });
+
+        let test: TestComplex = from_ref(&data).unwrap();
+
+        assert_eq!(fixture_data_complex(3), test);
     }
 }
