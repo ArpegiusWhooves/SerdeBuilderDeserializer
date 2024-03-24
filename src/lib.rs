@@ -16,6 +16,7 @@ pub enum BuilderDataType<'de> {
     String(Cow<'de, str>),
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
+    Stack(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
     SelfReference(Weak<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
@@ -64,6 +65,7 @@ impl Error for BuilderError {
 }
 
 pub struct BuilderDeserializer<'de> {
+    stack: Vec<BuilderDataType<'de>>,
     data: BuilderDataType<'de>,
 }
 pub struct BuilderDeserializerRef<'r, 'de> {
