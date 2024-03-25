@@ -63,6 +63,11 @@ impl Error for BuilderError {
     }
 }
 
+
+struct Stack<'de> {
+    args: Vec<BuilderDataType<'de>>
+}
+
 pub struct BuilderDeserializer<'de> {
     data: BuilderDataType<'de>,
 }
@@ -75,6 +80,7 @@ where
     I: Iterator<Item = BuilderDataType<'de>>,
 {
     data: I,
+    index: usize,
     size_hint: Option<usize>,
 }
 struct BuilderListAccessRef<'r, 'de, I>
@@ -83,6 +89,7 @@ where
     I: Iterator<Item = &'r BuilderDataType<'de>>,
 {
     data: I,
+    index: usize,
     size_hint: Option<usize>,
 }
 struct BuilderMapAccess<'de, I>
@@ -415,6 +422,7 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
             }),
             BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccessRef {
                 data: v.iter(),
+                index:0,
                 size_hint: Some(v.len()),
             }),
             BuilderDataType::Reference(r) => {
@@ -529,6 +537,7 @@ impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
                 let times = it.next().map_or(0, |r| r.to_unsigned());
                 visitor.visit_seq(BuilderListAccessRef {
                     data: it.cycle().take(times as usize),
+                    index:0,
                     size_hint: Some(times as usize),
                 })
             }
@@ -661,6 +670,7 @@ where
     {
         if let Some(data) = self.data.next() {
             Ok(Some(seed.deserialize(BuilderDeserializer { data })?))
+            self.index += 1;
         } else {
             Ok(None)
         }
@@ -682,6 +692,7 @@ where
     {
         if let Some(data) = self.data.next() {
             Ok(Some(seed.deserialize(BuilderDeserializerRef { data })?))
+            self.index += 1;
         } else {
             Ok(None)
         }
