@@ -69,11 +69,12 @@ struct Stack<'de> {
     args: Vec<BuilderDataType<'de>>
 }
 
-pub struct BuilderDeserializer<'de> {
-    stack: Vec<BuilderDataType<'de>>,
+pub struct BuilderDeserializer<'s, 'de> {
+    stack: &'s mut Stack<'de>,
     data: BuilderDataType<'de>,
 }
-pub struct BuilderDeserializerRef<'r, 'de> {
+pub struct BuilderDeserializerRef<'s, 'r, 'de> {
+    stack: &'s mut Stack<'de>,
     data: &'r BuilderDataType<'de>,
 }
 
@@ -82,7 +83,7 @@ where
     I: Iterator<Item = BuilderDataType<'de>>,
 {
     data: I,
-    index: usize,
+    stack: &'s mut Stack<'de>,
     size_hint: Option<usize>,
 }
 struct BuilderListAccessRef<'r, 'de, I>
@@ -400,7 +401,7 @@ impl<'de> BuilderDataType<'de> {
     }
 }
 
-impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
+impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'de> {
     type Error = BuilderError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -467,7 +468,7 @@ impl<'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'r, 'de> {
     }
 }
 
-impl<'de> serde::Deserializer<'de> for BuilderDeserializer<'de> {
+impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
     type Error = BuilderError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
