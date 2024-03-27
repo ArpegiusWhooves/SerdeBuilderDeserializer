@@ -16,7 +16,7 @@ pub enum BuilderDataType<'de> {
     String(Cow<'de, str>),
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
-    Stack(Vec<BuilderDataType<'de>>),
+    Closure(Vec<BuilderDataType<'de>>),
     Reference(Rc<BuilderDataType<'de>>),
     SelfReference(Weak<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
@@ -64,51 +64,54 @@ impl Error for BuilderError {
     }
 }
 
-
-struct Stack<'de> {
-    args: Vec<BuilderDataType<'de>>
+struct Closure<'de> {
+    args: Vec<BuilderDataType<'de>>,
 }
 
 pub struct BuilderDeserializer<'s, 'de> {
-    stack: &'s mut Stack<'de>,
+    closure: &'s mut Closure<'de>,
     data: BuilderDataType<'de>,
 }
 pub struct BuilderDeserializerRef<'s, 'r, 'de> {
-    stack: &'s mut Stack<'de>,
+    closure: &'s mut Closure<'de>,
     data: &'r BuilderDataType<'de>,
 }
 
-struct BuilderListAccess<'de, I>
+struct BuilderListAccess<'s, 'de, I>
 where
     I: Iterator<Item = BuilderDataType<'de>>,
 {
+    closure: &'s mut Closure<'de>,
     data: I,
-    stack: &'s mut Stack<'de>,
     size_hint: Option<usize>,
+    index: usize,
 }
-struct BuilderListAccessRef<'r, 'de, I>
+struct BuilderListAccessRef<'s, 'r, 'de, I>
 where
     'de: 'r,
     I: Iterator<Item = &'r BuilderDataType<'de>>,
 {
+    closure: &'s mut Closure<'de>,
     data: I,
-    index: usize,
     size_hint: Option<usize>,
+    index: usize,
 }
-struct BuilderMapAccess<'de, I>
+struct BuilderMapAccess<'s, 'de, I>
 where
     I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
+    closure: &'s mut Closure<'de>,
     data: I,
     leftover: Option<BuilderDataType<'de>>,
     size_hint: Option<usize>,
 }
 
-struct BuilderMapAccessRef<'r, 'de, I>
+struct BuilderMapAccessRef<'s, 'r, 'de, I>
 where
     'de: 'r,
     I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
+    closure: &'s mut Closure<'de>,
     data: I,
     leftover: Option<&'r BuilderDataType<'de>>,
     size_hint: Option<usize>,
@@ -419,34 +422,45 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                 Cow::Owned(v) => visitor.visit_str(v),
             },
             BuilderDataType::Map(v) => visitor.visit_map(BuilderMapAccessRef {
+                closure: self.closure,
                 data: v.iter(),
                 leftover: None,
                 size_hint: Some(v.len()),
             }),
             BuilderDataType::List(v) => visitor.visit_seq(BuilderListAccessRef {
+                closure: self.closure,
                 data: v.iter(),
-                index:0,
+                index: 0,
                 size_hint: Some(v.len()),
             }),
-            BuilderDataType::Reference(r) => {
-                BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+            BuilderDataType::Reference(r) => BuilderDeserializerRef {
+                closure: self.closure,
+                data: r.as_ref(),
             }
+            .deserialize_any(visitor),
             BuilderDataType::SelfReference(w) => {
                 if let Some(r) = w.upgrade() {
-                    BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+                    BuilderDeserializerRef {
+                        closure: self.closure,
+                        data: r.as_ref(),
+                    }
+                    .deserialize_any(visitor)
                 } else {
                     Err(BuilderError::InvalidSelfRefrence)
                 }
             }
             BuilderDataType::Store(r) => BuilderDeserializer {
+                closure: self.closure,
                 data: r.as_ref().borrow().clone(),
             }
             .deserialize_any(visitor),
             BuilderDataType::Take(r) => BuilderDeserializer {
+                closure: self.closure,
                 data: r.as_ref().borrow_mut().take_one(),
             }
             .deserialize_any(visitor),
             BuilderDataType::IfThenElse(v) => BuilderDeserializerRef {
+                closure: self.closure,
                 data: BuilderDataType::if_then_else_ref(v)?,
             }
             .deserialize_any(visitor),
@@ -454,8 +468,10 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                 let mut it = v.iter();
                 let times = it.next().map_or(0, |r| r.to_unsigned());
                 visitor.visit_seq(BuilderListAccessRef {
+                    closure: self.closure,
                     data: it.cycle().take(times as usize),
                     size_hint: Some(times as usize),
+                    index: 0,
                 })
             }
             _ => todo!(),
@@ -488,6 +504,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
             BuilderDataType::Map(v) => {
                 let size_hint = Some(v.len());
                 visitor.visit_map(BuilderMapAccess {
+                    closure: self.closure,
                     data: v.into_iter(),
                     leftover: None,
                     size_hint,
@@ -496,42 +513,64 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
             BuilderDataType::List(v) => {
                 let size_hint = Some(v.len());
                 visitor.visit_seq(BuilderListAccess {
+                    closure: self.closure,
                     data: v.into_iter(),
                     size_hint,
+                    index: 0,
                 })
             }
             BuilderDataType::Reference(r) => {
                 if Rc::weak_count(&r) > 0 {
-                    BuilderDeserializerRef { data: &r }.deserialize_any(visitor)
+                    BuilderDeserializerRef {
+                        closure: self.closure,
+                        data: &r,
+                    }
+                    .deserialize_any(visitor)
                 } else {
                     match Rc::try_unwrap(r) {
-                        Ok(data) => BuilderDeserializer { data }.deserialize_any(visitor),
-                        Err(r) => BuilderDeserializerRef { data: &r }.deserialize_any(visitor),
+                        Ok(data) => BuilderDeserializer {
+                            closure: self.closure,
+                            data,
+                        }
+                        .deserialize_any(visitor),
+                        Err(r) => BuilderDeserializerRef {
+                            closure: self.closure,
+                            data: &r,
+                        }
+                        .deserialize_any(visitor),
                     }
                 }
             }
             BuilderDataType::SelfReference(w) => {
                 if let Some(r) = w.upgrade() {
-                    BuilderDeserializerRef { data: r.as_ref() }.deserialize_any(visitor)
+                    BuilderDeserializerRef {
+                        closure: self.closure,
+                        data: r.as_ref(),
+                    }
+                    .deserialize_any(visitor)
                 } else {
                     Err(BuilderError::InvalidSelfRefrence)
                 }
             }
             BuilderDataType::Store(r) => match Rc::try_unwrap(r) {
                 Ok(c) => BuilderDeserializer {
+                    closure: self.closure,
                     data: c.into_inner(),
                 }
                 .deserialize_any(visitor),
                 Err(r) => BuilderDeserializer {
+                    closure: self.closure,
                     data: r.as_ref().borrow().clone(),
                 }
                 .deserialize_any(visitor),
             },
             BuilderDataType::Take(r) => BuilderDeserializer {
+                closure: self.closure,
                 data: r.as_ref().borrow_mut().take_one(),
             }
             .deserialize_any(visitor),
             BuilderDataType::IfThenElse(v) => BuilderDeserializer {
+                closure: self.closure,
                 data: BuilderDataType::if_then_else(v)?,
             }
             .deserialize_any(visitor),
@@ -539,8 +578,9 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                 let mut it = v.iter();
                 let times = it.next().map_or(0, |r| r.to_unsigned());
                 visitor.visit_seq(BuilderListAccessRef {
+                    closure: self.closure,
                     data: it.cycle().take(times as usize),
-                    index:0,
+                    index: 0,
                     size_hint: Some(times as usize),
                 })
             }
@@ -554,7 +594,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
     }
 }
 
-impl<'de, I> MapAccess<'de> for BuilderMapAccess<'de, I>
+impl<'s, 'de, I> MapAccess<'de> for BuilderMapAccess<'s, 'de, I>
 where
     I: Iterator<Item = (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
@@ -566,7 +606,10 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
-            let v = seed.deserialize(BuilderDeserializer { data: a })?;
+            let v = seed.deserialize(BuilderDeserializer {
+                closure: self.closure,
+                data: a,
+            })?;
             Ok(Some(v))
         } else {
             Ok(None)
@@ -578,7 +621,10 @@ where
         V: DeserializeSeed<'de>,
     {
         if let Some(leftover) = self.leftover.take() {
-            seed.deserialize(BuilderDeserializer { data: leftover })
+            seed.deserialize(BuilderDeserializer {
+                closure: self.closure,
+                data: leftover,
+            })
         } else {
             Err(BuilderError::InvalidMapAccess)
         }
@@ -599,8 +645,14 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = None;
-            let va = kseed.deserialize(BuilderDeserializer { data: a })?;
-            let vb = vseed.deserialize(BuilderDeserializer { data: b })?;
+            let va = kseed.deserialize(BuilderDeserializer {
+                closure: self.closure,
+                data: a,
+            })?;
+            let vb = vseed.deserialize(BuilderDeserializer {
+                closure: self.closure,
+                data: b,
+            })?;
             Ok(Some((va, vb)))
         } else {
             Ok(None)
@@ -608,7 +660,7 @@ where
     }
 }
 
-impl<'r, 'de, I> MapAccess<'de> for BuilderMapAccessRef<'r, 'de, I>
+impl<'s, 'r, 'de, I> MapAccess<'de> for BuilderMapAccessRef<'s, 'r, 'de, I>
 where
     I: Iterator<Item = &'r (BuilderDataType<'de>, BuilderDataType<'de>)>,
 {
@@ -620,7 +672,10 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = Some(b);
-            let v = seed.deserialize(BuilderDeserializerRef { data: a })?;
+            let v = seed.deserialize(BuilderDeserializerRef {
+                closure: self.closure,
+                data: a,
+            })?;
             Ok(Some(v))
         } else {
             Ok(None)
@@ -632,7 +687,10 @@ where
         V: DeserializeSeed<'de>,
     {
         if let Some(leftover) = self.leftover.take() {
-            seed.deserialize(BuilderDeserializerRef { data: leftover })
+            seed.deserialize(BuilderDeserializerRef {
+                closure: self.closure,
+                data: leftover,
+            })
         } else {
             Err(BuilderError::InvalidMapAccess)
         }
@@ -653,15 +711,21 @@ where
     {
         if let Some((a, b)) = self.data.next() {
             self.leftover = None;
-            let va = kseed.deserialize(BuilderDeserializerRef { data: a })?;
-            let vb = vseed.deserialize(BuilderDeserializerRef { data: b })?;
+            let va = kseed.deserialize(BuilderDeserializerRef {
+                closure: self.closure,
+                data: a,
+            })?;
+            let vb = vseed.deserialize(BuilderDeserializerRef {
+                closure: self.closure,
+                data: b,
+            })?;
             Ok(Some((va, vb)))
         } else {
             Ok(None)
         }
     }
 }
-impl<'de, I> SeqAccess<'de> for BuilderListAccess<'de, I>
+impl<'s, 'de, I> SeqAccess<'de> for BuilderListAccess<'s, 'de, I>
 where
     I: Iterator<Item = BuilderDataType<'de>>,
 {
@@ -672,8 +736,11 @@ where
         T: DeserializeSeed<'de>,
     {
         if let Some(data) = self.data.next() {
-            Ok(Some(seed.deserialize(BuilderDeserializer { data })?))
             self.index += 1;
+            Ok(Some(seed.deserialize(BuilderDeserializer {
+                closure: self.closure,
+                data,
+            })?))
         } else {
             Ok(None)
         }
@@ -683,7 +750,7 @@ where
         self.size_hint
     }
 }
-impl<'r, 'de, I> SeqAccess<'de> for BuilderListAccessRef<'r, 'de, I>
+impl<'s, 'r, 'de, I> SeqAccess<'de> for BuilderListAccessRef<'s, 'r, 'de, I>
 where
     I: Iterator<Item = &'r BuilderDataType<'de>>,
 {
@@ -694,8 +761,11 @@ where
         T: DeserializeSeed<'de>,
     {
         if let Some(data) = self.data.next() {
-            Ok(Some(seed.deserialize(BuilderDeserializerRef { data })?))
             self.index += 1;
+            Ok(Some(seed.deserialize(BuilderDeserializerRef {
+                closure: self.closure,
+                data,
+            })?))
         } else {
             Ok(None)
         }
@@ -710,7 +780,11 @@ pub fn from_data<'a, T>(data: BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
 {
-    let builder = BuilderDeserializer { data };
+    let mut closure = Closure { args: Vec::new() };
+    let builder = BuilderDeserializer {
+        closure: &mut closure,
+        data,
+    };
 
     Ok(T::deserialize(builder)?)
 }
@@ -719,7 +793,11 @@ pub fn from_ref<'a, T>(data: &BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
 {
-    let builder = BuilderDeserializerRef { data };
+    let mut closure = Closure { args: Vec::new() };
+    let builder = BuilderDeserializerRef {
+        closure: &mut closure,
+        data,
+    };
 
     Ok(T::deserialize(builder)?)
 }
