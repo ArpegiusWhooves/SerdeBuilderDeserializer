@@ -534,6 +534,20 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                     index: 0,
                 })
             }
+            BuilderDataType::Closure(v) => {
+                if let Some(r) = v.first().cloned() {
+                    let mut closure = Closure {
+                        args: v,
+                        index: self.closure.index,
+                    };
+                    BuilderDeserializer {
+                        closure: &mut closure,
+                        data: r,
+                    }.deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            }
             BuilderDataType::Reference(r) => {
                 if Rc::weak_count(&r) > 0 {
                     BuilderDeserializerRef {
