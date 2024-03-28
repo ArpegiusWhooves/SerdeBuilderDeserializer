@@ -66,6 +66,7 @@ impl Error for BuilderError {
 
 struct Closure<'de> {
     args: Vec<BuilderDataType<'de>>,
+    index: usize,
 }
 
 pub struct BuilderDeserializer<'s, 'de> {
@@ -433,6 +434,20 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                 index: 0,
                 size_hint: Some(v.len()),
             }),
+            BuilderDataType::Closure(v) => {
+                let mut closure = Closure {
+                    args: v.clone(),
+                    index: self.closure.index,
+                };
+                if let Some(r) = v.first() {
+                    BuilderDeserializerRef {
+                        closure: &mut closure,
+                        data: r,
+                    }.deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            }
             BuilderDataType::Reference(r) => BuilderDeserializerRef {
                 closure: self.closure,
                 data: r.as_ref(),
@@ -736,6 +751,7 @@ where
         T: DeserializeSeed<'de>,
     {
         if let Some(data) = self.data.next() {
+            self.closure.index = self.index;
             self.index += 1;
             Ok(Some(seed.deserialize(BuilderDeserializer {
                 closure: self.closure,
@@ -761,6 +777,7 @@ where
         T: DeserializeSeed<'de>,
     {
         if let Some(data) = self.data.next() {
+            self.closure.index = self.index;
             self.index += 1;
             Ok(Some(seed.deserialize(BuilderDeserializerRef {
                 closure: self.closure,
@@ -780,7 +797,10 @@ pub fn from_data<'a, T>(data: BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
 {
-    let mut closure = Closure { args: Vec::new() };
+    let mut closure = Closure {
+        args: Vec::new(),
+        index: 0,
+    };
     let builder = BuilderDeserializer {
         closure: &mut closure,
         data,
@@ -793,7 +813,10 @@ pub fn from_ref<'a, T>(data: &BuilderDataType<'a>) -> Result<T, BuilderError>
 where
     T: Deserialize<'a>,
 {
-    let mut closure = Closure { args: Vec::new() };
+    let mut closure = Closure {
+        args: Vec::new(),
+        index: 0,
+    };
     let builder = BuilderDeserializerRef {
         closure: &mut closure,
         data,
