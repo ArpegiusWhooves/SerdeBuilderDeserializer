@@ -17,6 +17,7 @@ pub enum BuilderDataType<'de> {
     Map(Vec<(BuilderDataType<'de>, BuilderDataType<'de>)>),
     List(Vec<BuilderDataType<'de>>),
     Closure(Vec<BuilderDataType<'de>>),
+    Argument(usize),
     Reference(Rc<BuilderDataType<'de>>),
     SelfReference(Weak<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
@@ -448,6 +449,17 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                     Err(BuilderError::InvalidFunctionArgument)
                 }
             }
+            BuilderDataType::Argument(a) => {
+                if let Some(p) = self.closure.args.get(*a).cloned() {
+                    BuilderDeserializer {
+                        closure: self.closure,
+                        data: p,
+                    }
+                    .deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            }
             BuilderDataType::Reference(r) => BuilderDeserializerRef {
                 closure: self.closure,
                 data: r.as_ref(),
@@ -544,6 +556,17 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                         closure: &mut closure,
                         data: r,
                     }.deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            }
+            BuilderDataType::Argument(a) => {
+                if let Some(p) = self.closure.args.get(a).cloned() {
+                    BuilderDeserializer {
+                        closure: self.closure,
+                        data: p,
+                    }
+                    .deserialize_any(visitor)
                 } else {
                     Err(BuilderError::InvalidFunctionArgument)
                 }
