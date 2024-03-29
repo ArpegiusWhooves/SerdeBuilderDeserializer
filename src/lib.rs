@@ -515,6 +515,9 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                     index: 0,
                 })
             }
+            BuilderDataType::Index => {
+                visitor.visit_u64(self.closure.index as u64)
+            }
             _ => todo!(),
         }
     }
@@ -671,6 +674,9 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                     index: 0,
                     size_hint: Some(times as usize),
                 })
+            }
+            BuilderDataType::Index => {
+                visitor.visit_u64(self.closure.index as u64)
             }
             _ => todo!(),
         }
