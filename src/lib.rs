@@ -1,5 +1,6 @@
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
+use serde_json::value::Index;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -18,6 +19,8 @@ pub enum BuilderDataType<'de> {
     List(Vec<BuilderDataType<'de>>),
     Closure(Vec<BuilderDataType<'de>>),
     Argument(usize),
+    TakeFromArgument(usize),
+    PopArgument, 
     Reference(Rc<BuilderDataType<'de>>),
     SelfReference(Weak<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
@@ -460,6 +463,17 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                     Err(BuilderError::InvalidFunctionArgument)
                 }
             }
+            BuilderDataType::TakeFromArgument(a) => {
+                if let Some(p) = self.closure.args.get_mut(*a).map(|r|r.take_one()) {
+                    BuilderDeserializer {
+                        closure: self.closure,
+                        data: p,
+                    }
+                    .deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            }
             BuilderDataType::Reference(r) => BuilderDeserializerRef {
                 closure: self.closure,
                 data: r.as_ref(),
@@ -571,6 +585,28 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                     Err(BuilderError::InvalidFunctionArgument)
                 }
             }
+            BuilderDataType::TakeFromArgument(a) => {
+                if let Some(p) = self.closure.args.get_mut(a).map(|r|r.take_one()) {
+                    BuilderDeserializer {
+                        closure: self.closure,
+                        data: p,
+                    }
+                    .deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            }
+            BuilderDataType::PopArgument() => {
+                if let Some(p) = self.closure.args.pop() {
+                    BuilderDeserializer {
+                        closure: self.closure,
+                        data: p,
+                    }
+                    .deserialize_any(visitor)
+                } else {
+                    Err(BuilderError::InvalidFunctionArgument)
+                }
+            } 
             BuilderDataType::Reference(r) => {
                 if Rc::weak_count(&r) > 0 {
                     BuilderDeserializerRef {
