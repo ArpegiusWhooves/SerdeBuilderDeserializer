@@ -1,6 +1,5 @@
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
 use serde::{forward_to_deserialize_any, Deserialize, Serialize};
-use serde_json::value::Index;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -20,7 +19,7 @@ pub enum BuilderDataType<'de> {
     Closure(Vec<BuilderDataType<'de>>),
     Argument(usize),
     TakeFromArgument(usize),
-    PopArgument, 
+    PopArgument,
     Reference(Rc<BuilderDataType<'de>>),
     SelfReference(Weak<BuilderDataType<'de>>),
     Store(Rc<RefCell<BuilderDataType<'de>>>),
@@ -122,8 +121,48 @@ where
     size_hint: Option<usize>,
 }
 
-impl<'de> BuilderDataType<'de> {
+impl<'de> Closure<'de> {
+    fn get_argument(&self, a: usize) -> Result<&BuilderDataType<'de>, BuilderError> {
+        if let Some(a) = self.args.get(a) {
+            Ok(a)
+        } else {
+            Err(BuilderError::InvalidFunctionArgument)
+        }
+    }
+    fn clone_argument(&self, a: usize) -> Result<BuilderDataType<'de>, BuilderError> {
+        if let Some(a) = self.args.get(a) {
+            Ok(a.clone())
+        } else {
+            Err(BuilderError::InvalidFunctionArgument)
+        }
+    }
+    fn take_argument(&mut self, a: usize) -> Result<BuilderDataType<'de>, BuilderError> {
+        if let Some(a) = self.args.get_mut(a) {
+            Ok(a.take_one())
+        } else {
+            Err(BuilderError::InvalidFunctionArgument)
+        }
+    }
+    fn resolve(&mut self, b: BuilderDataType<'de>) -> Result<BuilderDataType<'de>, BuilderError> {
+        match b {
+            BuilderDataType::Argument(a) => self.clone_argument(a),
+            BuilderDataType::TakeFromArgument(a) => self.take_argument(a),
+            BuilderDataType::IfThenElse(v) => self.if_then_else(v),
+            b => Ok(b),
+        }
+    }
+
+    fn resolve_to_bool(&mut self, b: &BuilderDataType<'de>) -> Result<bool, BuilderError> {
+        Ok(match b {
+            BuilderDataType::Argument(a) => self.get_argument(*a)?.check_true(),
+            BuilderDataType::TakeFromArgument(a) => self.take_argument(*a)?.check_true(),
+            BuilderDataType::IfThenElse(v) => self.if_then_else_ref(v)?.check_true(),
+            b => b.check_true(),
+        })
+    }
+
     fn if_then_else_ref<'a>(
+        &mut self,
         v: &'a Vec<BuilderDataType<'de>>,
     ) -> Result<&'a BuilderDataType<'de>, BuilderError> {
         let mut i = v.iter();
@@ -136,14 +175,16 @@ impl<'de> BuilderDataType<'de> {
         let Some(if_false) = i.next() else {
             return Err(BuilderError::InvalidFunctionArgument);
         };
-        if condition.check_true() {
+        if self.resolve_to_bool(condition)? {
             Ok(if_true)
         } else {
             Ok(if_false)
         }
     }
-
-    fn if_then_else(v: Vec<BuilderDataType<'de>>) -> Result<BuilderDataType<'de>, BuilderError> {
+    fn if_then_else(
+        &mut self,
+        v: Vec<BuilderDataType<'de>>,
+    ) -> Result<BuilderDataType<'de>, BuilderError> {
         let mut i = v.into_iter();
         let Some(condition) = i.next() else {
             return Err(BuilderError::InvalidFunctionArgument);
@@ -154,13 +195,15 @@ impl<'de> BuilderDataType<'de> {
         let Some(if_false) = i.next() else {
             return Err(BuilderError::InvalidFunctionArgument);
         };
-        if condition.check_true() {
+        if self.resolve(condition)?.check_true() {
             Ok(if_true)
         } else {
             Ok(if_false)
         }
     }
+}
 
+impl<'de> BuilderDataType<'de> {
     pub fn take_one(&mut self) -> BuilderDataType<'de> {
         match self {
             BuilderDataType::Empty => BuilderDataType::Empty,
@@ -212,9 +255,6 @@ impl<'de> BuilderDataType<'de> {
             }
             BuilderDataType::Store(r) => r.as_ref().borrow().check_true(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().check_true(),
-            BuilderDataType::IfThenElse(v) => BuilderDataType::if_then_else_ref(v)
-                .map(|r| r.check_true())
-                .unwrap_or(false),
             BuilderDataType::Repeat(v) => v.first().map(|r| r.check_true()).unwrap_or(false),
             _ => false,
         }
@@ -252,13 +292,6 @@ impl<'de> BuilderDataType<'de> {
             }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_unsigned(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_unsigned(),
-            BuilderDataType::IfThenElse(v) => {
-                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
-                    r.to_unsigned()
-                } else {
-                    0
-                }
-            }
             BuilderDataType::Repeat(v) => v.first().map(|r| r.to_unsigned()).unwrap_or(0),
             _ => 0,
         }
@@ -296,13 +329,6 @@ impl<'de> BuilderDataType<'de> {
             }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_signed(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_signed(),
-            BuilderDataType::IfThenElse(v) => {
-                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
-                    r.to_signed()
-                } else {
-                    0
-                }
-            }
             BuilderDataType::Repeat(v) => v.first().map(|r| r.to_signed()).unwrap_or(0),
             _ => 0,
         }
@@ -334,13 +360,6 @@ impl<'de> BuilderDataType<'de> {
             }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_float(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_float(),
-            BuilderDataType::IfThenElse(v) => {
-                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
-                    r.to_float()
-                } else {
-                    0.0
-                }
-            }
             BuilderDataType::Repeat(v) => v.first().map(|r| r.to_float()).unwrap_or(0.0),
             _ => 0.0,
         }
@@ -397,13 +416,6 @@ impl<'de> BuilderDataType<'de> {
             }
             BuilderDataType::Store(r) => r.as_ref().borrow().to_string(),
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_string(),
-            BuilderDataType::IfThenElse(v) => {
-                if let Ok(r) = BuilderDataType::if_then_else_ref(v) {
-                    r.to_string()
-                } else {
-                    Cow::Owned(String::new())
-                }
-            }
             _ => Cow::Owned(String::new()),
         }
     }
@@ -447,7 +459,8 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                     BuilderDeserializerRef {
                         closure: &mut closure,
                         data: r,
-                    }.deserialize_any(visitor)
+                    }
+                    .deserialize_any(visitor)
                 } else {
                     Err(BuilderError::InvalidFunctionArgument)
                 }
@@ -463,17 +476,11 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                     Err(BuilderError::InvalidFunctionArgument)
                 }
             }
-            BuilderDataType::TakeFromArgument(a) => {
-                if let Some(p) = self.closure.args.get_mut(*a).map(|r|r.take_one()) {
-                    BuilderDeserializer {
-                        closure: self.closure,
-                        data: p,
-                    }
-                    .deserialize_any(visitor)
-                } else {
-                    Err(BuilderError::InvalidFunctionArgument)
-                }
+            BuilderDataType::TakeFromArgument(a) => BuilderDeserializer {
+                data: self.closure.take_argument(*a)?,
+                closure: self.closure,
             }
+            .deserialize_any(visitor),
             BuilderDataType::Reference(r) => BuilderDeserializerRef {
                 closure: self.closure,
                 data: r.as_ref(),
@@ -501,8 +508,8 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
             }
             .deserialize_any(visitor),
             BuilderDataType::IfThenElse(v) => BuilderDeserializerRef {
+                data: self.closure.if_then_else_ref(v)?,
                 closure: self.closure,
-                data: BuilderDataType::if_then_else_ref(v)?,
             }
             .deserialize_any(visitor),
             BuilderDataType::Repeat(v) => {
@@ -515,9 +522,7 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                     index: 0,
                 })
             }
-            BuilderDataType::Index => {
-                visitor.visit_u64(self.closure.index as u64)
-            }
+            BuilderDataType::Index => visitor.visit_u64(self.closure.index as u64),
             _ => todo!(),
         }
     }
@@ -572,7 +577,8 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                     BuilderDeserializer {
                         closure: &mut closure,
                         data: r,
-                    }.deserialize_any(visitor)
+                    }
+                    .deserialize_any(visitor)
                 } else {
                     Err(BuilderError::InvalidFunctionArgument)
                 }
@@ -589,7 +595,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                 }
             }
             BuilderDataType::TakeFromArgument(a) => {
-                if let Some(p) = self.closure.args.get_mut(a).map(|r|r.take_one()) {
+                if let Some(p) = self.closure.args.get_mut(a).map(|r| r.take_one()) {
                     BuilderDeserializer {
                         closure: self.closure,
                         data: p,
@@ -599,7 +605,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                     Err(BuilderError::InvalidFunctionArgument)
                 }
             }
-            BuilderDataType::PopArgument() => {
+            BuilderDataType::PopArgument => {
                 if let Some(p) = self.closure.args.pop() {
                     BuilderDeserializer {
                         closure: self.closure,
@@ -609,7 +615,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                 } else {
                     Err(BuilderError::InvalidFunctionArgument)
                 }
-            } 
+            }
             BuilderDataType::Reference(r) => {
                 if Rc::weak_count(&r) > 0 {
                     BuilderDeserializerRef {
@@ -661,8 +667,8 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
             }
             .deserialize_any(visitor),
             BuilderDataType::IfThenElse(v) => BuilderDeserializer {
+                data: self.closure.if_then_else(v)?,
                 closure: self.closure,
-                data: BuilderDataType::if_then_else(v)?,
             }
             .deserialize_any(visitor),
             BuilderDataType::Repeat(v) => {
@@ -675,9 +681,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
                     size_hint: Some(times as usize),
                 })
             }
-            BuilderDataType::Index => {
-                visitor.visit_u64(self.closure.index as u64)
-            }
+            BuilderDataType::Index => visitor.visit_u64(self.closure.index as u64),
             _ => todo!(),
         }
     }
@@ -1044,6 +1048,36 @@ mod tests {
         });
 
         let test: TestComplex = from_ref(&data).unwrap();
+
+        assert_eq!(fixture_data_complex(3), test);
+    }
+
+    #[test]
+    fn test_closure() {
+        let data = BuilderDataType::Closure(vec![
+            BuilderDataType::List(vec![
+                BuilderDataType::Argument(1),
+                BuilderDataType::IfThenElse(vec![
+                    BuilderDataType::TakeFromArgument(2),
+                    BuilderDataType::Map(vec![(
+                        BuilderDataType::String(Cow::from("test")),
+                        BuilderDataType::Argument(0),
+                    )]),
+                    BuilderDataType::Map(vec![]),
+                ]),
+            ]),
+            BuilderDataType::Repeat(vec![
+                BuilderDataType::Unsigned(3),
+                BuilderDataType::List(vec![
+                    BuilderDataType::Integer(123),
+                    BuilderDataType::Boolean(true),
+                    BuilderDataType::String(Cow::from("test")),
+                ]),
+            ]),
+            BuilderDataType::Integer(3),
+        ]);
+
+        let test: TestComplex = from_data(data).unwrap();
 
         assert_eq!(fixture_data_complex(3), test);
     }
