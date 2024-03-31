@@ -136,7 +136,7 @@ impl<'de> Closure<'de> {
             Err(BuilderError::InvalidFunctionArgument)
         }
     }
-    fn take_argument(&mut self, a: usize) -> Result<BuilderDataType<'de>, BuilderError> {
+    fn take_from_argument(&mut self, a: usize) -> Result<BuilderDataType<'de>, BuilderError> {
         if let Some(a) = self.args.get_mut(a) {
             Ok(a.take_one())
         } else {
@@ -146,16 +146,24 @@ impl<'de> Closure<'de> {
     fn resolve(&mut self, b: BuilderDataType<'de>) -> Result<BuilderDataType<'de>, BuilderError> {
         match b {
             BuilderDataType::Argument(a) => self.clone_argument(a),
-            BuilderDataType::TakeFromArgument(a) => self.take_argument(a),
+            BuilderDataType::TakeFromArgument(a) => self.take_from_argument(a),
             BuilderDataType::IfThenElse(v) => self.if_then_else(v),
             b => Ok(b),
+        }
+    }
+    fn resolve_clone(&mut self, b: &BuilderDataType<'de>) -> Result<BuilderDataType<'de>, BuilderError> {
+        match b {
+            BuilderDataType::Argument(a) => self.clone_argument(*a),
+            BuilderDataType::TakeFromArgument(a) => self.take_from_argument(*a),
+            BuilderDataType::IfThenElse(v) => self.if_then_else_ref(v).cloned(),
+            b => Ok(b.clone()),
         }
     }
 
     fn resolve_to_bool(&mut self, b: &BuilderDataType<'de>) -> Result<bool, BuilderError> {
         Ok(match b {
             BuilderDataType::Argument(a) => self.get_argument(*a)?.check_true(),
-            BuilderDataType::TakeFromArgument(a) => self.take_argument(*a)?.check_true(),
+            BuilderDataType::TakeFromArgument(a) => self.take_from_argument(*a)?.check_true(),
             BuilderDataType::IfThenElse(v) => self.if_then_else_ref(v)?.check_true(),
             b => b.check_true(),
         })
@@ -450,9 +458,9 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                 index: 0,
                 size_hint: Some(v.len()),
             }),
-            BuilderDataType::Closure(v) => {
+            BuilderDataType::Closure(v) => {  
                 let mut closure = Closure {
-                    args: v.clone(),
+                    args: v.iter().map(|a|self.closure.resolve_clone(a)).collect::<Result<Vec<_>, _>>()?,
                     index: self.closure.index,
                 };
                 if let Some(r) = v.first() {
@@ -477,7 +485,7 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                 }
             }
             BuilderDataType::TakeFromArgument(a) => BuilderDeserializer {
-                data: self.closure.take_argument(*a)?,
+                data: self.closure.take_from_argument(*a)?,
                 closure: self.closure,
             }
             .deserialize_any(visitor),
@@ -571,7 +579,7 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
             BuilderDataType::Closure(v) => {
                 if let Some(r) = v.first().cloned() {
                     let mut closure = Closure {
-                        args: v,
+                        args: v.into_iter().map(|a|self.closure.resolve(a)).collect::<Result<Vec<_>, _>>()?,
                         index: self.closure.index,
                     };
                     BuilderDeserializer {
