@@ -1,12 +1,11 @@
-
-
-
-use std::borrow::Cow;
-use std::rc::Rc;
-
-use crate::{BuilderDataType, BuilderDeserializerRef, BuilderError, BuilderListAccess, BuilderListAccessRef, BuilderMapAccess, Closure};
+use crate::{
+    BuilderDataType, BuilderDeserializerRef, BuilderError, BuilderListAccess, BuilderListAccessRef,
+    BuilderMapAccess, Closure,
+};
 use serde::de::Visitor;
 use serde::forward_to_deserialize_any;
+use std::borrow::Cow;
+use std::rc::Rc;
 
 pub struct BuilderDeserializer<'s, 'de> {
     pub(crate) closure: &'s mut Closure<'de>,
@@ -51,7 +50,10 @@ impl<'s, 'de> serde::Deserializer<'de> for BuilderDeserializer<'s, 'de> {
             BuilderDataType::Closure(v) => {
                 if let Some(r) = v.first().cloned() {
                     let mut closure = Closure {
-                        args: v.into_iter().map(|a|self.closure.resolve(a)).collect::<Result<Vec<_>, _>>()?,
+                        args: v
+                            .into_iter()
+                            .map(|a| self.closure.resolve(a))
+                            .collect::<Result<Vec<_>, _>>()?,
                         index: self.closure.index,
                     };
                     BuilderDeserializer {

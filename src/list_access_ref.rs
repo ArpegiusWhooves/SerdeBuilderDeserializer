@@ -1,7 +1,5 @@
-
-
 use crate::{BuilderDataType, BuilderDeserializerRef, BuilderError, Closure};
-use serde::de::{DeserializeSeed, SeqAccess}; 
+use serde::de::{DeserializeSeed, SeqAccess};
 
 pub struct BuilderListAccessRef<'s, 'r, 'de, I>
 where

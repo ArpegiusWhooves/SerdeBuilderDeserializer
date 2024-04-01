@@ -1,4 +1,3 @@
-
 use crate::datatype::BuilderDataType;
 use crate::errors::BuilderError;
 
@@ -6,7 +5,6 @@ pub struct Closure<'de> {
     pub(crate) args: Vec<BuilderDataType<'de>>,
     pub(crate) index: usize,
 }
-
 
 impl<'de> Closure<'de> {
     pub(crate) fn get_argument(&self, a: usize) -> Result<&BuilderDataType<'de>, BuilderError> {
@@ -23,14 +21,20 @@ impl<'de> Closure<'de> {
             Err(BuilderError::InvalidFunctionArgument)
         }
     }
-    pub(crate) fn take_from_argument(&mut self, a: usize) -> Result<BuilderDataType<'de>, BuilderError> {
+    pub(crate) fn take_from_argument(
+        &mut self,
+        a: usize,
+    ) -> Result<BuilderDataType<'de>, BuilderError> {
         if let Some(a) = self.args.get_mut(a) {
             Ok(a.take_one())
         } else {
             Err(BuilderError::InvalidFunctionArgument)
         }
     }
-    pub(crate) fn resolve(&mut self, b: BuilderDataType<'de>) -> Result<BuilderDataType<'de>, BuilderError> {
+    pub(crate) fn resolve(
+        &mut self,
+        b: BuilderDataType<'de>,
+    ) -> Result<BuilderDataType<'de>, BuilderError> {
         match b {
             BuilderDataType::Argument(a) => self.clone_argument(a),
             BuilderDataType::TakeFromArgument(a) => self.take_from_argument(a),
@@ -38,7 +42,10 @@ impl<'de> Closure<'de> {
             b => Ok(b),
         }
     }
-    pub(crate) fn resolve_clone(&mut self, b: &BuilderDataType<'de>) -> Result<BuilderDataType<'de>, BuilderError> {
+    pub(crate) fn resolve_clone(
+        &mut self,
+        b: &BuilderDataType<'de>,
+    ) -> Result<BuilderDataType<'de>, BuilderError> {
         match b {
             BuilderDataType::Argument(a) => self.clone_argument(*a),
             BuilderDataType::TakeFromArgument(a) => self.take_from_argument(*a),
@@ -46,8 +53,10 @@ impl<'de> Closure<'de> {
             b => Ok(b.clone()),
         }
     }
-
-    pub(crate) fn resolve_to_bool(&mut self, b: &BuilderDataType<'de>) -> Result<bool, BuilderError> {
+    pub(crate) fn resolve_to_bool(
+        &mut self,
+        b: &BuilderDataType<'de>,
+    ) -> Result<bool, BuilderError> {
         Ok(match b {
             BuilderDataType::Argument(a) => self.get_argument(*a)?.check_true(),
             BuilderDataType::TakeFromArgument(a) => self.take_from_argument(*a)?.check_true(),
@@ -55,7 +64,6 @@ impl<'de> Closure<'de> {
             b => b.check_true(),
         })
     }
-
     pub(crate) fn if_then_else_ref<'a>(
         &mut self,
         v: &'a Vec<BuilderDataType<'de>>,

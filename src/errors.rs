@@ -1,8 +1,5 @@
-
-
-use std::fmt::Display;
-
 use serde::de::Error;
+use std::fmt::Display;
 
 #[derive(Debug)]
 pub enum BuilderError {

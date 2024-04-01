@@ -1,17 +1,15 @@
-
-
-use std::borrow::Cow;
-
-use crate::{BuilderDataType, BuilderDeserializer, BuilderError, BuilderListAccessRef, BuilderMapAccessRef, Closure};
+use crate::{
+    BuilderDataType, BuilderDeserializer, BuilderError, BuilderListAccessRef, BuilderMapAccessRef,
+    Closure,
+};
 use serde::de::Visitor;
 use serde::forward_to_deserialize_any;
+use std::borrow::Cow;
 
 pub struct BuilderDeserializerRef<'s, 'r, 'de> {
     pub(crate) closure: &'s mut Closure<'de>,
     pub(crate) data: &'r BuilderDataType<'de>,
 }
-
-
 
 impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'de> {
     type Error = BuilderError;
@@ -42,9 +40,12 @@ impl<'s, 'r, 'de> serde::Deserializer<'de> for BuilderDeserializerRef<'s, 'r, 'd
                 index: 0,
                 size_hint: Some(v.len()),
             }),
-            BuilderDataType::Closure(v) => {  
+            BuilderDataType::Closure(v) => {
                 let mut closure = Closure {
-                    args: v.iter().map(|a|self.closure.resolve_clone(a)).collect::<Result<Vec<_>, _>>()?,
+                    args: v
+                        .iter()
+                        .map(|a| self.closure.resolve_clone(a))
+                        .collect::<Result<Vec<_>, _>>()?,
                     index: self.closure.index,
                 };
                 if let Some(r) = v.first() {

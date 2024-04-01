@@ -1,6 +1,3 @@
-
-
-
 use crate::{BuilderDataType, BuilderDeserializerRef, BuilderError, Closure};
 use serde::de::{DeserializeSeed, MapAccess};
 
@@ -14,7 +11,6 @@ where
     pub(crate) leftover: Option<&'r BuilderDataType<'de>>,
     pub(crate) size_hint: Option<usize>,
 }
-
 
 impl<'s, 'r, 'de, I> MapAccess<'de> for BuilderMapAccessRef<'s, 'r, 'de, I>
 where

@@ -1,10 +1,9 @@
-
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct TestSimple {
