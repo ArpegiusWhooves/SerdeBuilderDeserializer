@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
+use serde::Deserialize;
+
 #[derive(Debug, Clone)]
 pub enum BuilderDataType<'de> {
     Empty,
@@ -244,5 +246,18 @@ impl<'de> BuilderDataType<'de> {
             BuilderDataType::Take(r) => r.as_ref().borrow_mut().take_one().to_string(),
             _ => Cow::Owned(String::new()),
         }
+    }
+}
+
+struct DataTypeVisitor<'de> {
+    data: BuilderDataType<'de>
+}
+
+impl<'de> serde::Deserialize<'de> for BuilderDataType<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!("deserializer.deserialize_any(visitor)")
     }
 }
